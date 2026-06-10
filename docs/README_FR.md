@@ -36,7 +36,7 @@ Sur les appareils jailbreakés, VansonMod ouvre aussi des flux plus profonds au 
 ## Navigation
 
 - **App Selection** : afficher les processus en cours, toutes les apps installées ou les processus système ; recherche par nom / Bundle ID / PID ; attacher, ouvrir, tuer, sauvegarder ou inspecter les changements de code.
-- **Memory Debug** : recherches exactes, fuzzy, groupées et de proximité, filtrage des résultats, édition en lot, et saut vers les vues valeur ou Hex.
+- **Memory Debug** : recherches exactes, fuzzy, groupées, par intervalle et de proximité, filtrage des résultats, timeline de recherche pour restaurer d’anciens snapshots de résultats, annulation de la dernière écriture manuelle, édition en lot, et saut vers les vues valeur ou Hex.
 - **RVA Debug** : appliquer des patchs par module et offset, et gérer les enregistrements RVA.
 - **Toolbox** : gérer verrous mémoire, favoris, pointeurs, RVA, signatures, fichiers de vérification et scripts.
 - **Settings** : configurer thème, langue, icônes, ordre des onglets, plages de recherche, tolérance float, limite de résultats et mises à jour ; l’ordre des onglets peut aussi être modifié rapidement par un appui long sur le menu du bas.
@@ -44,7 +44,7 @@ Sur les appareils jailbreakés, VansonMod ouvre aussi des flux plus profonds au 
 ## Points forts
 
 - **Gestion des processus et applications** : vues `Running / All / System`, noms localisés, affichage de version, favoris, copie de PID / Bundle ID, lancement rapide d’app et arrêt de processus.
-- **Recherche mémoire et édition en lot** : modes exact, fuzzy, groupé, intervalle et proximité, filtres supérieur / inférieur / entre, écriture fixe, édition incrémentale, verrouillage massif et favoris massifs.
+- **Recherche mémoire et édition en lot** : modes exact, fuzzy, groupé, intervalle et proximité, snapshots de timeline avec restauration, annulation d’écriture manuelle, filtres supérieur / inférieur / entre, écriture fixe, édition incrémentale, verrouillage massif et favoris massifs.
 - **Navigateur mémoire et éditeur Hex** : saut d’adresse, rafraîchissement auto, vue chaîne, copie d’adresses en lot ; l’éditeur Hex propose les modes `Hex / Split / Text`, l’édition par ligne et le saut par offset.
 - **Analyse et vérification de pointeurs** : chaînes manuelles ou automatiques, modes statique / dynamique / tous / backtrack, vérification temps réel, comparaison par snapshot et import/export de fichiers de vérification.
 - **Signatures et scripts** : analyse de signature depuis n’importe quelle adresse, portée par module, recherche globale, smart mask ; environnement JavaScript intégré avec guides et exemples consultables directement dans VM.

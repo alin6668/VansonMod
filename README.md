@@ -36,7 +36,7 @@ On jailbroken devices, VansonMod unlocks deeper code-level workflows such as **R
 ## Navigation
 
 - **App Selection**: browse running processes, all installed apps, or system processes; search by name / Bundle ID / PID; quickly attach, open, kill, back up, or inspect code changes for a target app.
-- **Memory Debug**: perform exact, fuzzy, group, and nearby searches, filter results, batch edit values, and jump into value or Hex views.
+- **Memory Debug**: perform exact, fuzzy, group, range, and nearby searches, filter results, use the search timeline to restore earlier result snapshots, undo the last manual write, batch edit values, and jump into value or Hex views.
 - **RVA Debug**: patch by module and offset, manage saved RVA records, and handle deeper code-level workflows in jailbreak environments.
 - **Toolbox**: manage memory locks, favorites, pointers, RVA records, signatures, verifier files, and scripts in one place.
 - **Settings**: configure theme, language, icons, tab order, search ranges, float tolerance, result limits, update checks, and more, with quick tab reordering by long-pressing the bottom menu.
@@ -44,7 +44,7 @@ On jailbroken devices, VansonMod unlocks deeper code-level workflows such as **R
 ## Highlights
 
 - **Process and App Management**: supports `Running / All / System` views, localized app names, version display, starring, PID / Bundle ID copying, quick app launch, and process termination.
-- **Memory Search and Batch Editing**: supports exact, fuzzy, group, range, and nearby search modes, plus greater-than / less-than / between filters, fixed value writes, incremental edits, batch lock, batch favorite, and batch delete.
+- **Memory Search and Batch Editing**: supports exact, fuzzy, group, range, and nearby search modes, result timeline snapshots with restore, manual-write undo, greater-than / less-than / between filters, fixed value writes, incremental edits, batch lock, batch favorite, and batch delete.
 - **Memory Browser and Hex Editor**: supports address jumping, auto refresh, string view, and batch address copying; the Hex editor supports `Hex / Split / Text` layouts, row editing, offset jumps, and fast writes.
 - **Pointer Analysis and Verification**: supports manual and automatic pointer chains, static / dynamic / all / backtrack modes, real-time verification, incremental snapshots, changed-region comparison, verifier file save/import/export, and lock integration.
 - **Signature Analysis**: jump into signature analysis from any address, choose module scope, run global searches, apply smart masking, verify matches, and save signatures directly into the toolbox.

@@ -15,6 +15,9 @@
 #import <objc/message.h>
 #define TR(key) ([[VMLocalization shared] localizedString:key])
 @interface VMMemoryActionSheet : NSObject
++ (NSUInteger)writeSizeForType:(VMDataType)type
+                       oldValue:(NSString *)oldValue
+                       newValue:(NSString *)newValue;
 @end
 
 @implementation VMMemoryActionSheet
@@ -174,6 +177,30 @@
                                                              type:type
                                                              inVC:vc];
                                           }]];
+
+  VMMemoryWriteUndoItem *undoItem =
+      [[VMMemoryEngine shared] lastManualWriteUndoForAddress:addr type:type];
+  if (undoItem) {
+    NSString *undoTitle = [NSString
+        stringWithFormat:@"%@: %@", TR(@"Undo_Last_Modify"),
+                         undoItem.oldValue ?: @""];
+    [alert addAction:[UIAlertAction
+                         actionWithTitle:undoTitle
+                                   style:UIAlertActionStyleDefault
+                                 handler:^(UIAlertAction *a) {
+                                   BOOL ok = [[VMMemoryEngine shared]
+                                       undoLastManualWriteForAddress:addr
+                                                                type:type];
+                                   [self showToast:ok ? TR(@"Undo_Success")
+                                                      : TR(@"Undo_Failed")
+                                              inVC:vc];
+                                   if (ok &&
+                                       [vc respondsToSelector:@selector
+                                           (doRefreshValues)]) {
+                                     [vc performSelector:@selector(doRefreshValues)];
+                                   }
+                                 }]];
+  }
 
   if (type != VMDataTypeString) {
     [alert addAction:[UIAlertAction actionWithTitle:TR(@"Tab_Ptr_Analysis")
@@ -381,6 +408,22 @@
                             handler:^(UIAlertAction *a) {
                               NSString *newVal =
                                   alert.textFields.firstObject.text;
+                              NSString *oldVal =
+                                  [[VMMemoryEngine shared] readAddress:address
+                                                                  type:type];
+                              NSUInteger oldSize =
+                                  [self writeSizeForType:type
+                                                oldValue:oldVal
+                                                newValue:newVal];
+                              NSData *oldData =
+                                  [[VMMemoryEngine shared] readRawMemory:address
+                                                                  length:oldSize];
+                              [[VMMemoryEngine shared]
+                                  rememberManualWriteUndoAtAddress:address
+                                                              type:type
+                                                          oldValue:oldVal
+                                                           oldData:oldData
+                                                          newValue:newVal];
 
                               [[VMMemoryEngine shared] writeAddress:address
                                                               value:newVal
@@ -399,6 +442,33 @@
                                           handler:nil]];
 
   [self safePresentAlert:alert from:vc];
+}
+
++ (NSUInteger)writeSizeForType:(VMDataType)type
+                       oldValue:(NSString *)oldValue
+                       newValue:(NSString *)newValue {
+  switch (type) {
+    case VMDataTypeInt8:
+    case VMDataTypeUInt8:
+      return 1;
+    case VMDataTypeInt16:
+    case VMDataTypeUInt16:
+      return 2;
+    case VMDataTypeInt64:
+    case VMDataTypeUInt64:
+    case VMDataTypeDouble:
+      return 8;
+    case VMDataTypeString: {
+      NSUInteger oldLen = [oldValue lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+      NSUInteger newLen = [newValue lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+      return MAX((NSUInteger)1, MAX(oldLen, newLen));
+    }
+    case VMDataTypeInt32:
+    case VMDataTypeUInt32:
+    case VMDataTypeFloat:
+    default:
+      return 4;
+  }
 }
 
 + (void)showOffsetCalculatorForBase:(uint64_t)baseAddr

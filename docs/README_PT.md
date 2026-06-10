@@ -36,7 +36,7 @@ Em dispositivos com jailbreak, o VansonMod também desbloqueia fluxos mais profu
 ## Navegação
 
 - **App Selection**: ver processos em execução, todas as apps instaladas ou processos do sistema; pesquisar por nome / Bundle ID / PID; anexar, abrir, terminar, fazer backup ou verificar mudanças de código.
-- **Memory Debug**: pesquisas exatas, fuzzy, em grupo e por proximidade, filtros de resultados, edição em lote e salto para vistas de valor ou Hex.
+- **Memory Debug**: pesquisas exatas, fuzzy, em grupo, por intervalo e por proximidade, filtros de resultados, linha do tempo para restaurar snapshots de resultados, desfazer a última escrita manual, edição em lote e salto para vistas de valor ou Hex.
 - **RVA Debug**: aplicar patches por módulo e offset e gerir registos RVA.
 - **Toolbox**: gerir bloqueios de memória, favoritos, ponteiros, RVA, assinaturas, ficheiros de verificação e scripts.
 - **Settings**: configurar tema, idioma, ícones, ordem dos separadores, intervalos de busca, tolerância float, limite de resultados e atualizações; também é possível reordenar separadores com um toque longo no menu inferior.
@@ -44,7 +44,7 @@ Em dispositivos com jailbreak, o VansonMod também desbloqueia fluxos mais profu
 ## Destaques
 
 - **Gestão de processos e apps**: vistas `Running / All / System`, nomes localizados, versão, favoritos, cópia de PID / Bundle ID, abertura rápida de apps e encerramento de processos.
-- **Pesquisa de memória e edição em lote**: pesquisa exata, fuzzy, em grupo, por intervalo e proximidade, além de filtros maior/menor/entre, escrita fixa, edição incremental, bloqueio em massa e favoritos em massa.
+- **Pesquisa de memória e edição em lote**: pesquisa exata, fuzzy, em grupo, por intervalo e proximidade, snapshots de linha do tempo com restauração, desfazer escrita manual, filtros maior/menor/entre, escrita fixa, edição incremental, bloqueio em massa e favoritos em massa.
 - **Navegador de memória e editor Hex**: salto para endereço, atualização automática, vista de strings, cópia em massa de endereços; o editor Hex suporta `Hex / Split / Text`, edição por linha e saltos por offset.
 - **Análise e verificação de ponteiros**: cadeias manuais ou automáticas, modos estático / dinâmico / todos / backtrack, verificação em tempo real, comparação por snapshots e importação/exportação de ficheiros de verificação.
 - **Assinaturas e scripts**: análise de assinaturas a partir de qualquer endereço, alcance por módulo, pesquisa global e smart mask; ambiente JavaScript integrado com guias e exemplos visíveis diretamente dentro do VM.

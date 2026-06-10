@@ -80,6 +80,26 @@ typedef enum : NSUInteger {
 @property(nonatomic, assign) uint64_t offset;
 @end
 
+@interface VMMemoryTimelineItem : NSObject
+@property(nonatomic, copy) NSString *title;
+@property(nonatomic, copy) NSString *detail;
+@property(nonatomic, copy) NSString *filePath;
+@property(nonatomic, strong) NSDate *date;
+@property(nonatomic, assign) NSUInteger resultCount;
+@property(nonatomic, assign) VMDataType dataType;
+@end
+
+@interface VMMemoryWriteUndoItem : NSObject
+@property(nonatomic, assign) pid_t pid;
+@property(nonatomic, copy) NSString *bundleID;
+@property(nonatomic, assign) uint64_t address;
+@property(nonatomic, assign) VMDataType type;
+@property(nonatomic, copy) NSString *oldValue;
+@property(nonatomic, copy) NSString *writtenValue;
+@property(nonatomic, strong) NSData *oldData;
+@property(nonatomic, strong) NSDate *date;
+@end
+
 @interface VMMemoryEngine : NSObject
 
 @property(nonatomic, assign) pid_t targetPid;
@@ -162,6 +182,24 @@ typedef enum : NSUInteger {
 - (void)clearSnapshot;
 - (void)clearAllSnapshots;
 - (BOOL)hasBackupSession;
+
+- (NSArray<VMMemoryTimelineItem *> *)memoryTimelineItems;
+- (void)captureMemoryTimelineWithTitle:(NSString *)title
+                                detail:(NSString *)detail
+                              dataType:(VMDataType)type;
+- (BOOL)restoreMemoryTimelineAtIndex:(NSUInteger)index;
+- (void)removeMemoryTimelineAtIndex:(NSUInteger)index;
+- (void)clearMemoryTimeline;
+
+- (void)rememberManualWriteUndoAtAddress:(uint64_t)address
+                                    type:(VMDataType)type
+                                oldValue:(NSString *)oldValue
+                                oldData:(NSData *)oldData
+                                newValue:(NSString *)newValue;
+- (VMMemoryWriteUndoItem *)lastManualWriteUndoForAddress:(uint64_t)address
+                                                    type:(VMDataType)type;
+- (BOOL)undoLastManualWriteForAddress:(uint64_t)address type:(VMDataType)type;
+- (void)clearManualWriteUndo;
 
 - (void)scanPointersPointingToAddresses:(NSSet<NSNumber *> *)targets
                              rangeStart:(uint64_t)start

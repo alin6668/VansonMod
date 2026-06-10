@@ -36,7 +36,7 @@ Trên thiết bị đã jailbreak, VansonMod còn mở rộng sang các quy trì
 ## Điều hướng
 
 - **App Selection**: xem tiến trình đang chạy, tất cả app đã cài hoặc tiến trình hệ thống; tìm theo tên / Bundle ID / PID; nhanh chóng attach, mở app, kill, backup hoặc xem thay đổi mã.
-- **Memory Debug**: tìm kiếm exact, fuzzy, group và nearby, lọc kết quả, chỉnh sửa hàng loạt và chuyển sang dạng xem giá trị hoặc Hex.
+- **Memory Debug**: tìm kiếm exact, fuzzy, group, range và nearby, lọc kết quả, timeline tìm kiếm để khôi phục snapshot kết quả, hoàn tác lần ghi thủ công gần nhất, chỉnh sửa hàng loạt và chuyển sang dạng xem giá trị hoặc Hex.
 - **RVA Debug**: áp dụng patch theo module và offset, đồng thời quản lý các bản ghi RVA.
 - **Toolbox**: quản lý memory lock, favorites, pointer, RVA, signature, file verifier và script trong cùng một nơi.
 - **Settings**: cấu hình giao diện, ngôn ngữ, icon, thứ tự tab, phạm vi tìm kiếm, float tolerance, giới hạn kết quả và kiểm tra cập nhật; cũng có thể sắp xếp lại tab nhanh bằng cách nhấn giữ menu dưới cùng.
@@ -44,7 +44,7 @@ Trên thiết bị đã jailbreak, VansonMod còn mở rộng sang các quy trì
 ## Điểm nổi bật
 
 - **Quản lý tiến trình và ứng dụng**: hỗ trợ chế độ xem `Running / All / System`, tên app bản địa hóa, hiển thị phiên bản, gắn sao, sao chép PID / Bundle ID, mở app nhanh và kết thúc tiến trình.
-- **Tìm kiếm bộ nhớ và chỉnh sửa hàng loạt**: exact, fuzzy, group, range, nearby search; bộ lọc lớn hơn / nhỏ hơn / trong khoảng; ghi giá trị cố định, sửa tăng dần, khóa hàng loạt và đánh dấu yêu thích hàng loạt.
+- **Tìm kiếm bộ nhớ và chỉnh sửa hàng loạt**: exact, fuzzy, group, range, nearby search; snapshot timeline kèm khôi phục; hoàn tác ghi thủ công; bộ lọc lớn hơn / nhỏ hơn / trong khoảng; ghi giá trị cố định, sửa tăng dần, khóa hàng loạt và đánh dấu yêu thích hàng loạt.
 - **Memory browser và Hex editor**: nhảy tới địa chỉ, tự động làm mới, xem chuỗi, sao chép hàng loạt địa chỉ; Hex editor hỗ trợ bố cục `Hex / Split / Text`, chỉnh theo dòng và nhảy theo offset.
 - **Phân tích và xác minh con trỏ**: chuỗi con trỏ thủ công hoặc tự động, chế độ static / dynamic / all / backtrack, xác minh thời gian thực, so sánh snapshot và nhập/xuất file verifier.
 - **Signature và script**: phân tích signature từ bất kỳ địa chỉ nào, chọn phạm vi module, tìm kiếm toàn cục và smart mask; runtime JavaScript tích hợp với hướng dẫn và ví dụ xem trực tiếp trong VM.

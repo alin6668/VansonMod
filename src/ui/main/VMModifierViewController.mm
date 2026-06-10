@@ -109,6 +109,23 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
              target:self
              action:@selector(showJumpMenu)];
   self.navigationItem.rightBarButtonItems = @[ jumpBtn ];
+  if (!self.isPointerSearchMode) {
+    UIImage *timelineImage =
+        [VMIconHelper compatibleSystemImageNamed:@"clock.arrow.circlepath"];
+    UIBarButtonItem *timelineBtn = nil;
+    if (timelineImage) {
+      timelineBtn = [[UIBarButtonItem alloc] initWithImage:timelineImage
+                                                     style:UIBarButtonItemStylePlain
+                                                    target:self
+                                                    action:@selector(showTimelineSheet)];
+    } else {
+      timelineBtn = [[UIBarButtonItem alloc] initWithTitle:TR(@"Timeline_Nav_Button")
+                                                     style:UIBarButtonItemStylePlain
+                                                    target:self
+                                                    action:@selector(showTimelineSheet)];
+    }
+    self.navigationItem.leftBarButtonItem = timelineBtn;
+  }
 
   self.selectedItems = [NSMutableArray array];
   [self setupUI];
@@ -1227,6 +1244,16 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                      if (count == 0) {
                        [self handleZeroResults];
                      } else {
+                       NSString *detail = (mode == VMFilterModeBetween)
+                           ? [NSString stringWithFormat:@"%@ %@~%@",
+                                                        [self timelineTypeName:type],
+                                                        v1 ?: @"", v2 ?: @""]
+                           : [NSString stringWithFormat:@"%@ %@",
+                                                        [self timelineTypeName:type],
+                                                        v1 ?: @""];
+                       [self captureTimelineTitle:[self timelineFilterTitle:mode]
+                                           detail:detail
+                                             type:type];
                        [self.tableView reloadData];
                        [self updateResultInfo];
                        [self updateEmptyState];
@@ -1383,6 +1410,12 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                   UINotificationFeedbackGenerator *successGen = [[UINotificationFeedbackGenerator alloc] init];
                   [successGen notificationOccurred:UINotificationFeedbackTypeSuccess];
                   
+                  NSString *detail = [NSString stringWithFormat:@"%@ %@",
+                                                                 [self timelineTypeName:type],
+                                                                 valStr ?: @""];
+                  [self captureTimelineTitle:[self timelineModeTitle:VMSearchModeFuzzy]
+                                      detail:detail
+                                        type:type];
                   [self.tableView reloadData];
                   [self updateResultInfo];
                   [self updateEmptyState];
@@ -1681,6 +1714,10 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
           UINotificationFeedbackGenerator *successGen = [[UINotificationFeedbackGenerator alloc] init];
           [successGen notificationOccurred:UINotificationFeedbackTypeSuccess];
           
+          NSString *detail = [self timelineTypeName:type];
+          [self captureTimelineTitle:[self timelineFilterTitle:filterMode]
+                              detail:detail
+                                type:type];
           [self.tableView reloadData];
           [self updateResultInfo];
           [self updateEmptyState];
@@ -1752,6 +1789,12 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                   [successGen
                       notificationOccurred:UINotificationFeedbackTypeSuccess];
 
+                  NSString *detail = [NSString stringWithFormat:@"%@ %@",
+                                                                 [self timelineTypeName:type],
+                                                                 valStr ?: @""];
+                  [self captureTimelineTitle:[self timelineModeTitle:mode]
+                                      detail:detail
+                                        type:type];
                   [self.tableView reloadData];
                   [self updateResultInfo];
                   [self updateEmptyState];
@@ -1809,6 +1852,8 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 
   [[VMMemoryEngine shared] clearSession];
   [[VMMemoryEngine shared] clearAllSnapshots];
+  [[VMMemoryEngine shared] clearMemoryTimeline];
+  [[VMMemoryEngine shared] clearManualWriteUndo];
 
   self.isNextScan = NO;
   self.btnNearby.hidden = YES;
@@ -2100,6 +2145,12 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                                          animated:YES
                                        completion:nil];
                     } else {
+                      NSString *detail = [NSString stringWithFormat:@"%@ %@",
+                                                                     [self timelineTypeName:type],
+                                                                     val ?: @""];
+                      [self captureTimelineTitle:TR(@"Nearby_Btn")
+                                          detail:detail
+                                            type:type];
                       self.statusLabel.text =
                           [NSString stringWithFormat:@"%@: %@",
                                                      TR(@"Nearby_Prefix"), msg];
@@ -3021,6 +3072,129 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
       [[VMPointerSearchViewController alloc] init];
   ptrVC.level = 1;
   [self.navigationController pushViewController:ptrVC animated:YES];
+}
+
+- (NSString *)timelineTypeName:(VMDataType)type {
+  NSArray *names = @[ @"I8", @"I16", @"I32", @"I64", @"U8", @"U16", @"U32", @"U64", @"F32", @"F64", @"Str" ];
+  if (type < names.count)
+    return names[type];
+  return @"?";
+}
+
+- (NSString *)timelineModeTitle:(VMSearchMode)mode {
+  switch (mode) {
+    case VMSearchModeFuzzy:
+      return TR(@"Timeline_Mode_Fuzzy");
+    case VMSearchModeGroup:
+      return TR(@"Timeline_Mode_Group");
+    case VMSearchModeBetween:
+      return TR(@"Timeline_Mode_Between");
+    case VMSearchModeExact:
+    default:
+      return TR(@"Timeline_Mode_Exact");
+  }
+}
+
+- (NSString *)timelineFilterTitle:(VMFilterMode)mode {
+  switch (mode) {
+    case VMFilterModeLess:
+      return TR(@"Filter_Less");
+    case VMFilterModeGreater:
+      return TR(@"Filter_Greater");
+    case VMFilterModeBetween:
+      return TR(@"Filter_Between");
+    case VMFilterModeIncreased:
+      return TR(@"Fuz_Increased");
+    case VMFilterModeDecreased:
+      return TR(@"Fuz_Decreased");
+    case VMFilterModeChanged:
+      return TR(@"Fuz_Changed");
+    case VMFilterModeUnchanged:
+      return TR(@"Fuz_Unchanged");
+  }
+}
+
+- (void)captureTimelineTitle:(NSString *)title
+                      detail:(NSString *)detail
+                        type:(VMDataType)type {
+  [[VMMemoryEngine shared] captureMemoryTimelineWithTitle:title
+                                                   detail:detail
+                                                 dataType:type];
+}
+
+- (void)showTimelineSheet {
+  NSArray<VMMemoryTimelineItem *> *items =
+      [[VMMemoryEngine shared] memoryTimelineItems];
+  UIAlertController *sheet = [UIAlertController
+      alertControllerWithTitle:TR(@"Timeline_Title")
+                       message:items.count > 0 ? nil : TR(@"Timeline_Empty")
+                preferredStyle:UIAlertControllerStyleActionSheet];
+
+  NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
+  fmt.dateFormat = @"HH:mm:ss";
+
+  for (NSUInteger i = 0; i < items.count; i++) {
+    VMMemoryTimelineItem *item = items[i];
+    NSString *time = [fmt stringFromDate:item.date ?: [NSDate date]];
+    NSString *title = [NSString
+        stringWithFormat:@"%@  %@ · %lu",
+                         time,
+                         item.title ?: @"",
+                         (unsigned long)item.resultCount];
+    NSString *detail = item.detail.length > 0 ? item.detail : @"";
+    NSString *actionTitle = detail.length > 0
+        ? [NSString stringWithFormat:@"%@\n%@", title, detail]
+        : title;
+    [sheet addAction:[UIAlertAction
+                         actionWithTitle:actionTitle
+                                   style:UIAlertActionStyleDefault
+                                 handler:^(UIAlertAction *a) {
+                                   if ([[VMMemoryEngine shared]
+                                           restoreMemoryTimelineAtIndex:i]) {
+                                     self.dataTypeSegment.selectedSegmentIndex =
+                                         item.dataType;
+                                     [self.tableView reloadData];
+                                     [self updateResultInfo];
+                                     [self updateEmptyState];
+                                     [self updateButtonStates];
+                                     self.isNextScan = YES;
+                                     [self.searchBtn
+                                         setTitle:TR(@"Mod_Search_Next")
+                                         forState:UIControlStateNormal];
+                                     [self showToast:
+                                               [NSString stringWithFormat:
+                                                             TR(@"Timeline_Restored_Fmt"),
+                                                             time,
+                                                             (unsigned long)item.resultCount]];
+                                   } else {
+                                     [self showToast:TR(@"Timeline_Restore_Failed")];
+                                   }
+                                 }]];
+  }
+
+  if (items.count > 0) {
+    [sheet addAction:[UIAlertAction
+                         actionWithTitle:TR(@"Timeline_Clear")
+                                   style:UIAlertActionStyleDestructive
+                                 handler:^(UIAlertAction *a) {
+                                   [[VMMemoryEngine shared] clearMemoryTimeline];
+                                 }]];
+  }
+
+  [sheet addAction:[UIAlertAction actionWithTitle:TR(@"Btn_Cancel")
+                                            style:UIAlertActionStyleCancel
+                                          handler:nil]];
+
+  if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+    UIView *navBar = self.navigationController.navigationBar;
+    sheet.popoverPresentationController.sourceView = navBar ?: self.view;
+    sheet.popoverPresentationController.sourceRect =
+        navBar ? CGRectMake(0, 0, 50, 44)
+               : CGRectMake(self.view.bounds.size.width / 2,
+                            self.view.bounds.size.height / 2, 1, 1);
+  }
+
+  [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (void)showJumpMenu {

@@ -105,13 +105,16 @@ else
 	@echo "正在处理 TIPA..."
 	@rm -rf Payload
 	@mkdir Payload
-	@if [ -d ".theos/obj/$(APPLICATION_NAME).app" ]; then \
-		cp -r ".theos/obj/$(APPLICATION_NAME).app" Payload/; \
-	else \
+	@if [ -d ".theos/_/Applications/$(APPLICATION_NAME).app" ]; then \
+		cp -r ".theos/_/Applications/$(APPLICATION_NAME).app" Payload/; \
+	elif [ -d ".theos/obj/debug/$(APPLICATION_NAME).app" ]; then \
 		cp -r ".theos/obj/debug/$(APPLICATION_NAME).app" Payload/; \
+	else \
+		cp -r ".theos/obj/$(APPLICATION_NAME).app" Payload/; \
 	fi
 	@$(eval VERSION := $(shell grep -i "Version:" control | awk '{print $$2}'))
 	@echo "检测到版本号: $(VERSION)"
+	@rm -f "./packages/$(APPLICATION_NAME)_v$(VERSION).tipa"
 	@zip -r "./packages/$(APPLICATION_NAME)_v$(VERSION).tipa" Payload
 	@rm -rf Payload
 	@echo "打包完成！"

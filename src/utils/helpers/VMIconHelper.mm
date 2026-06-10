@@ -28,6 +28,7 @@
             
             @"arrow.counterclockwise": @"arrow.uturn.left",
             @"arrow.triangle.2.circlepath": @"arrow.2.circlepath", 
+            @"clock.arrow.circlepath": @"clock",
             @"cpu": @"memorychip",
             @"hammer": @"wrench",
             @"list.bullet.clipboard": @"doc.text",

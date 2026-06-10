@@ -219,6 +219,7 @@ public:
                         void *minVal, void *maxVal);
 
   void setStoragePath(const std::string &path, const std::string &swapPath);
+  bool restoreResultsFromFile(const std::string &filePath, size_t resultCount);
   std::vector<ScanResult> getResults(size_t start, size_t count);
   size_t getResultCount() const { return _resultCount; }
   void clearResults() { _resultCount = 0; }  

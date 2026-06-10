@@ -119,12 +119,18 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
 @end
 @implementation VMModuleMatch
 @end
+@implementation VMMemoryTimelineItem
+@end
+@implementation VMMemoryWriteUndoItem
+@end
 @interface VMMemoryEngine () {
   std::unique_ptr<VMCore::MemoryCore> _core;
   
 }
 @property(nonatomic, strong) NSMutableDictionary *contextStates;
 @property(nonatomic, strong) NSMutableArray<VMRegionBlock *> *memorySnapshot;
+@property(nonatomic, strong) NSMutableArray<VMMemoryTimelineItem *> *memoryTimeline;
+@property(nonatomic, strong) NSMutableArray<VMMemoryWriteUndoItem *> *manualWriteUndoStack;
 @end
 @implementation VMMemoryEngine
 + (instancetype)shared {
@@ -205,6 +211,8 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
     _favoriteItems = [NSMutableArray array];  
     _activeLockedPointers = [NSMutableArray array];
     _rvaPatches = [NSMutableArray array];
+    _memoryTimeline = [NSMutableArray array];
+    _manualWriteUndoStack = [NSMutableArray array];
 
     [self switchContext:@"mod"];
     [self loadSettings];
@@ -306,6 +314,8 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
   if (success) {
     [self clearSession];
     [self clearAllSnapshots];
+    [self clearMemoryTimeline];
+    [self clearManualWriteUndo];
     [self.lockedItems removeAllObjects];
 
     [self.rvaPatches removeAllObjects];
@@ -394,6 +404,12 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
   }
 
   self.contextPrefix = newPrefix;
+  if (_core) {
+    NSString *pathA = [self getPathA];
+    NSString *pathB = [self getPathB];
+    _core->setStoragePath([pathA UTF8String], [pathB UTF8String]);
+  }
+
   NSDictionary *savedState = _contextStates[newPrefix];
   if (savedState) {
     self.resultFilePath = savedState[@"path"];
@@ -426,6 +442,151 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
   [self clearBaselineSnapshot];
   
   [self clearFastFuzzySnapshot];
+}
+
+- (NSString *)memoryTimelineSnapshotPath {
+  NSString *uuid = [[NSUUID UUID] UUIDString];
+  NSString *name = [NSString stringWithFormat:@"vm_timeline_%@.bin", uuid];
+  return [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+}
+
+- (void)trimMemoryTimelineIfNeeded {
+  const NSUInteger maxItems = 20;
+  NSFileManager *fm = [NSFileManager defaultManager];
+  while (self.memoryTimeline.count > maxItems) {
+    VMMemoryTimelineItem *old = self.memoryTimeline.lastObject;
+    if (old.filePath.length > 0) {
+      [fm removeItemAtPath:old.filePath error:nil];
+    }
+    [self.memoryTimeline removeLastObject];
+  }
+}
+
+- (NSArray<VMMemoryTimelineItem *> *)memoryTimelineItems {
+  return [self.memoryTimeline copy];
+}
+
+- (void)captureMemoryTimelineWithTitle:(NSString *)title
+                                detail:(NSString *)detail
+                              dataType:(VMDataType)type {
+  if (self.resultCount == 0 || !self.resultFilePath)
+    return;
+
+  NSFileManager *fm = [NSFileManager defaultManager];
+  if (![fm fileExistsAtPath:self.resultFilePath])
+    return;
+
+  NSString *snapPath = [self memoryTimelineSnapshotPath];
+  NSError *error = nil;
+  if (![fm copyItemAtPath:self.resultFilePath toPath:snapPath error:&error])
+    return;
+
+  VMMemoryTimelineItem *item = [VMMemoryTimelineItem new];
+  item.title = title ?: @"";
+  item.detail = detail ?: @"";
+  item.filePath = snapPath;
+  item.resultCount = self.resultCount;
+  item.dataType = type;
+  item.date = [NSDate date];
+  [self.memoryTimeline insertObject:item atIndex:0];
+  [self trimMemoryTimelineIfNeeded];
+}
+
+- (BOOL)restoreMemoryTimelineAtIndex:(NSUInteger)index {
+  if (index >= self.memoryTimeline.count)
+    return NO;
+
+  VMMemoryTimelineItem *item = self.memoryTimeline[index];
+  NSFileManager *fm = [NSFileManager defaultManager];
+  if (item.filePath.length == 0 || ![fm fileExistsAtPath:item.filePath])
+    return NO;
+
+  NSString *copyPath = [self memoryTimelineSnapshotPath];
+  if (![fm copyItemAtPath:item.filePath toPath:copyPath error:nil])
+    return NO;
+
+  BOOL ok = _core->restoreResultsFromFile([copyPath UTF8String], item.resultCount);
+  if (ok) {
+    self.resultFilePath = [self getPathA];
+    self.resultCount = item.resultCount;
+    self.currentDataType = item.dataType;
+  } else {
+    [fm removeItemAtPath:copyPath error:nil];
+  }
+  return ok;
+}
+
+- (void)removeMemoryTimelineAtIndex:(NSUInteger)index {
+  if (index >= self.memoryTimeline.count)
+    return;
+  VMMemoryTimelineItem *item = self.memoryTimeline[index];
+  if (item.filePath.length > 0) {
+    [[NSFileManager defaultManager] removeItemAtPath:item.filePath error:nil];
+  }
+  [self.memoryTimeline removeObjectAtIndex:index];
+}
+
+- (void)clearMemoryTimeline {
+  NSFileManager *fm = [NSFileManager defaultManager];
+  for (VMMemoryTimelineItem *item in self.memoryTimeline) {
+    if (item.filePath.length > 0) {
+      [fm removeItemAtPath:item.filePath error:nil];
+    }
+  }
+  [self.memoryTimeline removeAllObjects];
+}
+
+- (void)rememberManualWriteUndoAtAddress:(uint64_t)address
+                                    type:(VMDataType)type
+                                oldValue:(NSString *)oldValue
+                                 oldData:(NSData *)oldData
+                                newValue:(NSString *)newValue {
+  if (!oldData || oldData.length == 0)
+    return;
+
+  VMMemoryWriteUndoItem *item = [VMMemoryWriteUndoItem new];
+  item.pid = self.targetPid;
+  item.bundleID = self.currentBundleID ?: @"";
+  item.address = address;
+  item.type = type;
+  item.oldValue = oldValue ?: @"";
+  item.writtenValue = newValue ?: @"";
+  item.oldData = oldData;
+  item.date = [NSDate date];
+  [self.manualWriteUndoStack insertObject:item atIndex:0];
+
+  const NSUInteger maxItems = 30;
+  while (self.manualWriteUndoStack.count > maxItems) {
+    [self.manualWriteUndoStack removeLastObject];
+  }
+}
+
+- (VMMemoryWriteUndoItem *)lastManualWriteUndoForAddress:(uint64_t)address
+                                                    type:(VMDataType)type {
+  for (VMMemoryWriteUndoItem *item in self.manualWriteUndoStack) {
+    BOOL sameProcess = item.pid == self.targetPid;
+    BOOL sameBundle = [item.bundleID isEqualToString:(self.currentBundleID ?: @"")];
+    if (sameProcess && sameBundle && item.address == address && item.type == type) {
+      return item;
+    }
+  }
+  return nil;
+}
+
+- (BOOL)undoLastManualWriteForAddress:(uint64_t)address type:(VMDataType)type {
+  VMMemoryWriteUndoItem *item = [self lastManualWriteUndoForAddress:address type:type];
+  if (!item)
+    return NO;
+
+  BOOL ok = [self writeRawData:item.oldData toAddress:address];
+  if (ok) {
+    [self.manualWriteUndoStack removeObject:item];
+  }
+  return ok;
+}
+
+- (void)clearManualWriteUndo {
+  [self.manualWriteUndoStack removeAllObjects];
 }
 
 #pragma mark - Session Snapshot Stack
@@ -536,6 +697,7 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
     }
 
     self.resultCount = _core->getResultCount();
+    self.resultFilePath = self.resultCount > 0 ? [self getPathA] : nil;
 
     dispatch_async(dispatch_get_main_queue(), ^{
       if (comp) {
@@ -564,6 +726,7 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
 
     _core->scanNearby({}, coreType, cValStr, range);
     self.resultCount = _core->getResultCount();
+    self.resultFilePath = self.resultCount > 0 ? [self getPathA] : nil;
 
     dispatch_async(dispatch_get_main_queue(), ^{
       if (comp) {
@@ -632,6 +795,7 @@ static void autoSearchProgressBridge(VMCore::MemoryCore::SearchProgress sp,
     }
     
     self.resultCount = _core->getResultCount();
+    self.resultFilePath = self.resultCount > 0 ? [self getPathA] : nil;
 
     dispatch_async(dispatch_get_main_queue(), ^{
       if (comp) {

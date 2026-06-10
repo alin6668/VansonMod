@@ -1345,6 +1345,24 @@ void MemoryCore::setStoragePath(const std::string &path,
   _fastFuzzySnapshotPath = path + ".fuzzy";
 }
 
+bool MemoryCore::restoreResultsFromFile(const std::string &filePath,
+                                        size_t resultCount) {
+  if (_storagePath.empty())
+    return false;
+
+  std::remove(_storagePath.c_str());
+  if (filePath.empty() || resultCount == 0) {
+    _resultCount = 0;
+    return true;
+  }
+
+  if (std::rename(filePath.c_str(), _storagePath.c_str()) != 0)
+    return false;
+
+  _resultCount = resultCount;
+  return true;
+}
+
 std::vector<ScanResult>
 MemoryCore::scanNearby(const std::vector<ScanResult> &baseResults,
                        DataType type, const std::string &valueStr,

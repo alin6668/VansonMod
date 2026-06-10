@@ -36,7 +36,7 @@ Auf gejailbreakten Geräten bietet VansonMod zusätzlich tiefere Code-Workflows 
 ## Navigation
 
 - **App Selection**: laufende Prozesse, alle installierten Apps oder Systemprozesse anzeigen; Suche per Name / Bundle ID / PID; direkt anhängen, öffnen, beenden, sichern oder Code-Änderungen prüfen.
-- **Memory Debug**: exakte, fuzzy, gruppierte und Nearby-Suche, Ergebnisfilter, Batch-Bearbeitung sowie Sprung in Wert- oder Hex-Ansicht.
+- **Memory Debug**: exakte, fuzzy, gruppierte, Bereichs- und Nearby-Suche, Ergebnisfilter, Such-Timeline zur Wiederherstellung früherer Ergebnis-Snapshots, Undo für die letzte manuelle Wertänderung, Batch-Bearbeitung sowie Sprung in Wert- oder Hex-Ansicht.
 - **RVA Debug**: Patches nach Modul und Offset anwenden und RVA-Einträge verwalten.
 - **Toolbox**: Memory-Locks, Favoriten, Pointer, RVA, Signaturen, Verifier-Dateien und Skripte zentral verwalten.
 - **Settings**: Theme, Sprache, Icons, Tab-Reihenfolge, Suchbereiche, Float-Toleranz, Ergebnislimit und Update-Checks konfigurieren; Tabs lassen sich auch per langem Druck auf das untere Menü schnell umsortieren.
@@ -44,7 +44,7 @@ Auf gejailbreakten Geräten bietet VansonMod zusätzlich tiefere Code-Workflows 
 ## Highlights
 
 - **Prozess- und App-Verwaltung**: `Running / All / System`-Ansichten, lokalisierte App-Namen, Versionsanzeige, Favoriten, PID-/Bundle-ID-Kopie, schneller App-Start und Prozessbeendigung.
-- **Speichersuche und Batch-Bearbeitung**: exakte, fuzzy, Gruppen-, Bereichs- und Nearby-Suche sowie größer/kleiner/zwischen-Filter, feste Werte, inkrementelle Bearbeitung, Massen-Lock und Massen-Favoriten.
+- **Speichersuche und Batch-Bearbeitung**: exakte, fuzzy, Gruppen-, Bereichs- und Nearby-Suche, Such-Timeline-Snapshots mit Wiederherstellung, Undo für manuelle Änderungen, größer/kleiner/zwischen-Filter, feste Werte, inkrementelle Bearbeitung, Massen-Lock und Massen-Favoriten.
 - **Speicher-Browser und Hex-Editor**: Adresssprung, Auto-Refresh, String-Ansicht, Massenkopie von Adressen; der Hex-Editor unterstützt `Hex / Split / Text`, Zeilenbearbeitung und Offset-Sprünge.
 - **Pointer-Analyse und Verifikation**: manuelle oder automatische Pointer-Ketten, statisch / dynamisch / alle / Backtrack, Echtzeit-Verifikation, Snapshot-Vergleich und Import/Export von Verifier-Dateien.
 - **Signaturen und Skripte**: Signaturanalyse ab beliebiger Adresse, Modulbereich, globale Suche und Smart Mask; integrierte JavaScript-Laufzeit mit Anleitungen und Beispielen direkt in VM.
