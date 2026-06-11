@@ -59,12 +59,93 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
     UITextField *activeField; 
 @end
 @implementation VMPatcherViewController
+- (NSString *)rvaFolderNameForBundleID:(NSString *)bundleID {
+  if (bundleID.length == 0)
+    return @"";
+  return [bundleID stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+}
+
+- (NSString *)rvaFolderPathForBundleID:(NSString *)bundleID
+                                create:(BOOL)create {
+  NSString *root = [[VMMemoryEngine shared] rvaRootFolder];
+  NSString *folderName = [self rvaFolderNameForBundleID:bundleID];
+  NSString *path = [root stringByAppendingPathComponent:folderName];
+  if (create) {
+    [[NSFileManager defaultManager] createDirectoryAtPath:path
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+  }
+  return path;
+}
+
+- (void)migrateLegacyRootRVAFilesIfNeeded {
+  NSString *root = [[VMMemoryEngine shared] rvaRootFolder];
+  NSFileManager *fm = [NSFileManager defaultManager];
+  NSArray *contents = [fm contentsOfDirectoryAtPath:root error:nil];
+  for (NSString *fileName in contents) {
+    if (![fileName hasSuffix:@".vmrva"])
+      continue;
+
+    NSString *filePath = [root stringByAppendingPathComponent:fileName];
+    NSData *data = [NSData dataWithContentsOfFile:filePath];
+    if (!data || data.length < 4)
+      continue;
+
+    NSString *bundleID = nil;
+    VMDataSession *session = [VMDataSession fromJSONData:data];
+    if (session.bundleID.length > 0 &&
+        ![session.bundleID isEqualToString:@"com.unknown.app"]) {
+      bundleID = session.bundleID;
+    }
+
+    if (bundleID.length == 0) {
+      for (id item in session.dataItems) {
+        if ([item isKindOfClass:[VMRVAPatch class]]) {
+          VMRVAPatch *patch = (VMRVAPatch *)item;
+          if (patch.bundleID.length > 0 &&
+              ![patch.bundleID isEqualToString:@"com.unknown.app"]) {
+            bundleID = patch.bundleID;
+            break;
+          }
+        }
+      }
+    }
+
+    if (bundleID.length == 0) {
+      NSDictionary *dict =
+          [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+      if ([dict isKindOfClass:[NSDictionary class]]) {
+        bundleID = dict[@"bundleID"];
+      }
+    }
+
+    if (bundleID.length == 0)
+      continue;
+
+    NSString *appDir = [self rvaFolderPathForBundleID:bundleID create:YES];
+    NSString *target = [appDir stringByAppendingPathComponent:fileName];
+    if ([fm fileExistsAtPath:target]) {
+      NSString *base = [fileName stringByDeletingPathExtension];
+      NSString *ext = [fileName pathExtension];
+      NSUInteger index = 1;
+      do {
+        target = [appDir
+            stringByAppendingPathComponent:
+                [NSString stringWithFormat:@"%@-%lu.%@", base,
+                                           (unsigned long)index, ext]];
+        index++;
+      } while ([fm fileExistsAtPath:target]);
+    }
+    [fm moveItemAtPath:filePath toPath:target error:nil];
+  }
+}
+
 - (void)checkAndCleanupFolderForBundleID:(NSString *)bid {
   if (!bid || bid.length == 0)
     return;
   NSFileManager *fm = [NSFileManager defaultManager];
-  NSString *root = [[VMMemoryEngine shared] rvaRootFolder];
-  NSString *appDir = [root stringByAppendingPathComponent:bid];
+  NSString *appDir = [self rvaFolderPathForBundleID:bid create:NO];
   BOOL isDir = NO;
   if (![fm fileExistsAtPath:appDir isDirectory:&isDir] || !isDir)
     return;
@@ -362,14 +443,35 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 
   if (accessing)
     [url stopAccessingSecurityScopedResource];
-  if (!session || !session.dataItems ||
-      ![session.dataType isEqualToString:@"rva"]) {
+  BOOL hasRVAPatch = NO;
+  for (id item in session.dataItems) {
+    if ([item isKindOfClass:[VMRVAPatch class]]) {
+      hasRVAPatch = YES;
+      break;
+    }
+  }
+  if (!session || !session.dataItems || !hasRVAPatch) {
     [self showToast:TR(@"Err_File_Format")];
     return;
   }
   NSMutableArray *importedItems =
       [NSMutableArray arrayWithArray:session.dataItems];
   NSString *importedBundleID = session.bundleID;
+  if ([importedBundleID isEqualToString:@"com.unknown.app"]) {
+    importedBundleID = nil;
+  }
+  if (importedBundleID.length == 0) {
+    for (id item in importedItems) {
+      if ([item isKindOfClass:[VMRVAPatch class]]) {
+        VMRVAPatch *patch = (VMRVAPatch *)item;
+        if (patch.bundleID.length > 0 &&
+            ![patch.bundleID isEqualToString:@"com.unknown.app"]) {
+          importedBundleID = patch.bundleID;
+          break;
+        }
+      }
+    }
+  }
   if (importedItems.count > 0 && importedBundleID) {
     int rvaCount = 0;
     for (id item in importedItems) {
@@ -378,19 +480,8 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
         p.isOn = NO;
         p.isImported = YES;
         p.bundleID = importedBundleID;
-        NSString *doc = [NSSearchPathForDirectoriesInDomains(
-            NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *root = [doc stringByAppendingPathComponent:@"VansonMod/RVA"];
-        NSString *appDir =
-            [root stringByAppendingPathComponent:importedBundleID];
-
-        NSFileManager *fm = [NSFileManager defaultManager];
-        if (![fm fileExistsAtPath:appDir]) {
-          [fm createDirectoryAtPath:appDir
-              withIntermediateDirectories:YES
-                               attributes:nil
-                                    error:nil];
-        }
+        NSString *appDir = [self rvaFolderPathForBundleID:importedBundleID
+                                                   create:YES];
 
         NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
         [fmt setDateFormat:@"yyMMdd_HHmmss_SSS"];
@@ -443,6 +534,7 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
 }
 
 - (void)reloadPatchData {
+  [self migrateLegacyRootRVAFilesIfNeeded];
   if (!self.filteredPatches) {
     self.filteredPatches = [NSMutableArray array];
   }
@@ -498,8 +590,8 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
     if (!self.filteredPatches)
       self.filteredPatches = [NSMutableArray array];
     [self.filteredPatches removeAllObjects];
-    NSString *path = [[VMMemoryEngine shared].rvaRootFolder
-        stringByAppendingPathComponent:self.viewingBundleID];
+    NSString *path = [self rvaFolderPathForBundleID:self.viewingBundleID
+                                             create:NO];
     NSArray *files =
         [[NSFileManager defaultManager] contentsOfDirectoryAtPath:path
                                                             error:nil];
@@ -2009,13 +2101,12 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
     }
   }
   NSFileManager *fm = [NSFileManager defaultManager];
-  NSString *root = [[VMMemoryEngine shared] rvaRootFolder];
   NSString *currentFolder = self.viewingBundleID;
   if (!currentFolder || currentFolder.length == 0) {
     [self showToast:TR(@"Err_No_BundleID")];
     return;
   }
-  NSString *appDir = [root stringByAppendingPathComponent:currentFolder];
+  NSString *appDir = [self rvaFolderPathForBundleID:currentFolder create:NO];
   for (VMRVAPatch *p in itemsToDelete) {
     if (p.fileName && p.fileName.length > 0) {
       NSString *filePath = [appDir stringByAppendingPathComponent:p.fileName];
@@ -2161,15 +2252,9 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                           patch.patchHex = alert.textFields[3].text;
 
                           if (patch.fileName && patch.fileName.length > 0) {
-                            NSString *doc =
-                                [NSSearchPathForDirectoriesInDomains(
-                                    NSDocumentDirectory, NSUserDomainMask, YES)
-                                    firstObject];
-                            NSString *root =
-                                [doc stringByAppendingPathComponent:
-                                         @"VansonMod/RVA"];
-                            NSString *appDir = [root
-                                stringByAppendingPathComponent:patch.bundleID];
+                            NSString *appDir =
+                                [self rvaFolderPathForBundleID:patch.bundleID
+                                                        create:YES];
                             NSString *filePath = [appDir
                                 stringByAppendingPathComponent:patch.fileName];
 
@@ -2396,10 +2481,9 @@ extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
                             VMRVAPatch *p = self.filteredPatches[indexPath.row];
                             NSString *bid = p.bundleID;
                             if (p.fileName && p.fileName.length > 0 && bid) {
-                              NSString *root =
-                                  [[VMMemoryEngine shared] rvaRootFolder];
-                              NSString *filePath = [[root
-                                  stringByAppendingPathComponent:bid]
+                              NSString *filePath = [[self
+                                  rvaFolderPathForBundleID:bid
+                                                    create:NO]
                                   stringByAppendingPathComponent:p.fileName];
                               [[NSFileManager defaultManager]
                                   removeItemAtPath:filePath

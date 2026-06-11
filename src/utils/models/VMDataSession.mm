@@ -20,6 +20,12 @@ static NSString *getCurrentVersion(void) {
   return version;
 }
 
+static BOOL isRVADataType(NSString *type) {
+  if (![type isKindOfClass:[NSString class]])
+    return NO;
+  return [[type lowercaseString] containsString:@"rva"];
+}
+
 @implementation VMDataSession
 
 + (BOOL)supportsSecureCoding {
@@ -171,6 +177,9 @@ static NSString *getCurrentVersion(void) {
 
   for (NSDictionary *itemDict in itemsArray) {
     NSString *type = itemDict[@"type"];
+    if ((!type || type.length == 0) && isRVADataType(session.dataType)) {
+      type = @"rva";
+    }
 
     if ([type isEqualToString:@"pointer"]) {
       VMPointerChain *chain = [VMPointerChain fromDictionary:itemDict];
@@ -272,6 +281,7 @@ static NSString *getCurrentVersion(void) {
     return nil;
 
   VMDataSession *session = [[self alloc] init];
+  session.dataType = jsonDict[@"dataType"] ?: @"unknown";
   session.bundleID = jsonDict[@"bundleID"] ?: @"com.unknown.app";
   session.appName = jsonDict[@"appName"] ?: @"Unknown App";
   session.appVersion = jsonDict[@"appVersion"] ?: @"1.0";
@@ -282,7 +292,7 @@ static NSString *getCurrentVersion(void) {
     NSString *type = itemDict[@"type"];
 
     if (!type || type.length == 0) {
-      type = @"pointer";
+      type = isRVADataType(session.dataType) ? @"rva" : @"pointer";
     }
 
     if ([type isEqualToString:@"pointer"]) {

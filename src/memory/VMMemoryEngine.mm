@@ -3107,6 +3107,7 @@ static void forwardSearchProgressBridge(VMCore::MemoryCore::SearchProgress progr
     
     _core->fastFuzzyFilter(coreType, filterMode, self.searchRangeStart, self.searchRangeEnd);
     self.resultCount = _core->getResultCount();
+    self.resultFilePath = self.resultCount > 0 ? [self getPathA] : nil;
     
     dispatch_async(dispatch_get_main_queue(), ^{
       if (comp) {

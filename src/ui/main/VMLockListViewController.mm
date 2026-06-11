@@ -20,6 +20,7 @@
 #import "include/VMPointerChain.h"
 #import "include/VMPointerManager.h"
 #import "include/VMRVAPatch.h"
+#import "include/VMStoragePathHelper.h"
 #import "include/VMSignatureModel.h"
 #import "../../utils/managers/LockCore.hpp"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -2555,12 +2556,10 @@ kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t,
       NSString *bid = patch.bundleID ?: self.targetBundleID;
 
       if (patch.fileName && patch.fileName.length > 0 && bid) {
-        NSString *doc = [NSSearchPathForDirectoriesInDomains(
-            NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-        NSString *filePath =
-            [[[doc stringByAppendingPathComponent:@"VansonMod/RVA"]
-                stringByAppendingPathComponent:bid]
-                stringByAppendingPathComponent:patch.fileName];
+        NSString *dir = [VMStoragePathHelper pathForSubdirectory:@"RVA"
+                                                        bundleID:bid
+                                                          create:NO];
+        NSString *filePath = [dir stringByAppendingPathComponent:patch.fileName];
         [[NSFileManager defaultManager] removeItemAtPath:filePath error:nil];
       }
 
@@ -4508,9 +4507,11 @@ kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t,
 - (void)showEditRVAAlert:(VMRVAPatch *)patch {
   [VMItemEditViewController presentInController:self model:patch onSave:^(VMRVAPatch *updated) {
     if (updated.fileName && updated.fileName.length > 0) {
-      NSString *doc = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-      NSString *path = [[[doc stringByAppendingPathComponent:@"VansonMod/RVA"] stringByAppendingPathComponent:updated.bundleID] stringByAppendingPathComponent:updated.fileName];
-      VMDataSession *s = [VMDataSession sessionWithData:@[updated] bundleID:updated.bundleID dataType:TR(@"Type_RVA")];
+      NSString *dir = [VMStoragePathHelper pathForSubdirectory:@"RVA"
+                                                      bundleID:updated.bundleID
+                                                        create:YES];
+      NSString *path = [dir stringByAppendingPathComponent:updated.fileName];
+      VMDataSession *s = [VMDataSession sessionWithData:@[updated] bundleID:updated.bundleID dataType:@"rva"];
       [[s toJSONData] writeToFile:path atomically:YES];
     } else {
       [[VMMemoryEngine shared] saveRVAPatches];
@@ -4522,8 +4523,9 @@ kern_return_t mach_vm_write(vm_map_t, mach_vm_address_t, vm_offset_t,
 
 - (void)checkAndCleanupRVAFolder:(NSString *)bid {
   if (!bid) return;
-  NSString *doc = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
-  NSString *dir = [[doc stringByAppendingPathComponent:@"VansonMod/RVA"] stringByAppendingPathComponent:bid];
+  NSString *dir = [VMStoragePathHelper pathForSubdirectory:@"RVA"
+                                                  bundleID:bid
+                                                    create:NO];
 
   NSFileManager *fm = [NSFileManager defaultManager];
   NSArray *contents = [fm contentsOfDirectoryAtPath:dir error:nil];
