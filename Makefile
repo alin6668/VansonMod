@@ -85,7 +85,9 @@ VansonMod_FILES = \
 	src/core/VMDebugEngine.mm \
 	src/core/AuditCore.cpp \
 	src/ui/memory/VMWatchpointViewController.mm \
-	src/ui/memory/VMProcessAuditViewController.mm
+	src/ui/memory/VMProcessAuditViewController.mm \
+	src/api/VMHTTPServer.mm \
+	src/api/VMAPIRouter.mm
 
 # 依赖框架
 VansonMod_FRAMEWORKS = UIKit CoreGraphics AVFoundation MobileCoreServices UniformTypeIdentifiers LinkPresentation JavaScriptCore

@@ -1,0 +1,78 @@
+name: 编译打包 VansonMod
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      skip_tipa:
+        description: '跳过 TIPA 打包'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 25
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: ver
+        run: |
+          V=$(grep -i "Version:" control | awk '{print $2}')
+          echo "version=$V" >> $GITHUB_OUTPUT
+          echo "版本: v$V"
+
+      - name: 安装 Theos
+        run: |
+          THEOS_DIR="$GITHUB_WORKSPACE/theos"
+          echo "THEOS=$THEOS_DIR" >> $GITHUB_ENV
+          git clone --recursive https://github.com/theos/theos.git "$THEOS_DIR" --depth 1
+
+          # 挂载 iOS SDK
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          SDK_VER=$(basename "$SDK_PATH" | sed 's/iPhoneOS//;s/\.sdk//')
+          mkdir -p "$THEOS_DIR/sdks"
+          ln -sf "$SDK_PATH" "$THEOS_DIR/sdks/iPhoneOS${SDK_VER}.sdk"
+          echo "SDK 版本: $SDK_VER"
+
+      - name: 编译
+        run: |
+          mkdir -p packages
+          if [ "${{ github.event.inputs.skip_tipa }}" = "true" ]; then
+            make package SKIP_TIPA=1
+          else
+            make package
+          fi
+
+      - name: 验证产物
+        run: |
+          echo "===== 编译产物 ====="
+          ls -lh packages/ 2>/dev/null || echo "无输出"
+          for f in packages/*.tipa; do
+            [ -f "$f" ] && echo "TIPA: $f ($(du -sh "$f" | awk '{print $1}'))"
+          done
+
+      - name: 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VansonMod-v${{ steps.ver.outputs.version }}
+          path: packages/*.tipa
+          retention-days: 90
+
+      - name: 发布 Release (tag 触发)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/*.tipa
+          name: VansonMod v${{ steps.ver.outputs.version }}
+          body: |
+            ## 变更
+
+            - ✨ 新增 HTTP API 服务器 (端口 8848)，支持 AUTOGO 远程调用
+            - 29 个 RESTful 端点：进程控制、内存搜索/读写、锁定、特征码、指针链、RVA 补丁
+            - 自动编译打包
+          generate_release_notes: true

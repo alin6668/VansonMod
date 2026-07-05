@@ -7,6 +7,7 @@
 #import "include/VMPointerManager.h"
 #import "src/utils/helpers/VMUIHelper.h"
 #import "src/utils/managers/VMImportHandler.h"
+#import "src/api/VMAPIRouter.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 
@@ -74,6 +75,15 @@
   }
 
   [self startKeepAlive];
+
+  // ---- 启动 HTTP API 服务器 (供 AUTOGO 远程调用) ----
+  [VMAPIRouter registerAllRoutes];
+  NSString *apiURL = [VMAPIRouter startServerOnPort:8848];
+  if (apiURL) {
+      NSLog(@"[VansonMod] ✅ API 服务器已启动: %@", apiURL);
+  } else {
+      NSLog(@"[VansonMod] ⚠️ API 服务器启动失败，请检查端口 8848 是否被占用");
+  }
 
   return YES;
 }
