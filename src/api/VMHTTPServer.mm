@@ -103,7 +103,7 @@
     self.serverURL = [NSString stringWithFormat:@"http://%@:%d", localIP ?: @"127.0.0.1", port];
 
     // 启动接收线程
-    __weak typeof(self) weakSelf = self;
+    __weak __typeof__(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         [weakSelf acceptLoop];
     });
@@ -151,7 +151,7 @@
         setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-        __weak typeof(self) weakSelf = self;
+        __weak __typeof__(self) weakSelf = self;
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             [weakSelf handleClient:clientFd];
         });
