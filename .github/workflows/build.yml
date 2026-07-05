@@ -26,11 +26,14 @@ jobs:
           echo "version=$V" >> $GITHUB_OUTPUT
           echo "版本: v$V"
 
-      - name: 安装 Theos
+      - name: 安装 Theos + ldid
         run: |
           THEOS_DIR="$GITHUB_WORKSPACE/theos"
           echo "THEOS=$THEOS_DIR" >> $GITHUB_ENV
           git clone --recursive https://github.com/theos/theos.git "$THEOS_DIR" --depth 1
+
+          # 安装 ldid (iOS 伪签名工具)
+          brew install ldid
 
           # 挂载 iOS SDK
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
