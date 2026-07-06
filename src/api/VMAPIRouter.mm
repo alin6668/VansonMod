@@ -305,7 +305,27 @@ static NSDictionary *_patchToJSON(VMRVAPatch *p) {
         }
     } else if (body[@"bundleID"]) {
         NSString *bid = body[@"bundleID"];
-        int pid = VMCore::SystemCore::getInstance().getPidByBundleID([bid UTF8String]);
+        int pid = 0;
+
+        // 1) 优先使用 LSApplicationWorkspace (iOS 私有框架，已链接 MobileCoreServices)
+        Class LSAppWorkspace = NSClassFromString(@"LSApplicationWorkspace");
+        if (LSAppWorkspace) {
+            id workspace = [LSAppWorkspace performSelector:@selector(defaultWorkspace)];
+            NSArray *apps = [workspace performSelector:@selector(allApplications)];
+            for (id app in apps) {
+                NSString *appBid = [app performSelector:@selector(bundleIdentifier)];
+                if ([appBid isEqualToString:bid]) {
+                    pid = [[app performSelector:@selector(pid)] intValue];
+                    break;
+                }
+            }
+        }
+
+        // 2) 回退到 sysctl 方式 (读 Info.plist)
+        if (pid <= 0) {
+            pid = VMCore::SystemCore::getInstance().getPidByBundleID([bid UTF8String]);
+        }
+
         if (pid <= 0) {
             respond(404, _err([NSString stringWithFormat:@"未找到进程: %@", bid]));
             return;
