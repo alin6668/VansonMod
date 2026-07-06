@@ -15,9 +15,11 @@
 
 @interface VMAppDelegate ()
 @property(nonatomic, strong) AVAudioPlayer *backgroundPlayer;
+@property(nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
 - (void)checkAppReinstallOrUpdate;
 - (void)setupDefaultSettingsIfNeeded;
 - (void)startKeepAlive;
+- (void)renewBackgroundTask;
 @end
 
 @implementation VMAppDelegate
@@ -103,34 +105,109 @@
             error:nil];
   [[AVAudioSession sharedInstance] setActive:YES error:nil];
 
-  unsigned char wavHeader[] = {
-      0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x41, 0x56,
-      0x45, 0x66, 0x6D, 0x74, 0x20, 0x10, 0x00, 0x00, 0x00, 0x01, 0x00,
-      0x01, 0x00, 0x44, 0xAC, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, 0x02,
-      0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, 0x00, 0x00, 0x00, 0x00};
-  NSMutableData *soundData = [NSMutableData dataWithBytes:wavHeader
-                                                   length:sizeof(wavHeader)];
-  [soundData appendData:[NSMutableData dataWithLength:100]];
+  // 监听音频中断，自动恢复播放
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(handleAudioInterruption:)
+             name:AVAudioSessionInterruptionNotification
+           object:nil];
+
+  // 生成 2 秒静音 WAV (44100Hz, 16-bit, mono) — 数据块大小正确写入头
+  int sampleRate = 44100;
+  int bitsPerSample = 16;
+  int channels = 1;
+  int durationSeconds = 2;
+  int dataSize = sampleRate * (bitsPerSample / 8) * channels * durationSeconds;
+
+  NSMutableData *wav = [NSMutableData data];
+  // RIFF 头
+  uint32_t fileSize = 36 + dataSize;
+  [wav appendBytes:"RIFF" length:4];
+  [wav appendBytes:&fileSize length:4];
+  [wav appendBytes:"WAVE" length:4];
+  // fmt 子块
+  [wav appendBytes:"fmt " length:4];
+  uint32_t fmtSize = 16;
+  uint16_t audioFormat = 1; // PCM
+  uint16_t numChannels = channels;
+  uint32_t sr = sampleRate;
+  uint32_t byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  uint16_t blockAlign = numChannels * (bitsPerSample / 8);
+  uint16_t bps = bitsPerSample;
+  [wav appendBytes:&fmtSize length:4];
+  [wav appendBytes:&audioFormat length:2];
+  [wav appendBytes:&numChannels length:2];
+  [wav appendBytes:&sr length:4];
+  [wav appendBytes:&byteRate length:4];
+  [wav appendBytes:&blockAlign length:2];
+  [wav appendBytes:&bps length:2];
+  // data 子块
+  [wav appendBytes:"data" length:4];
+  [wav appendBytes:&dataSize length:4];
+  // 静音 PCM 数据
+  [wav appendData:[NSMutableData dataWithLength:dataSize]];
 
   NSError *err;
-  self.backgroundPlayer = [[AVAudioPlayer alloc] initWithData:soundData
-                                                        error:&err];
+  self.backgroundPlayer = [[AVAudioPlayer alloc] initWithData:wav error:&err];
   if (self.backgroundPlayer) {
-    self.backgroundPlayer.numberOfLoops = -1;
+    self.backgroundPlayer.numberOfLoops = -1;  // 无限循环
     self.backgroundPlayer.volume = 0.01;
     [self.backgroundPlayer prepareToPlay];
     [self.backgroundPlayer play];
+    NSLog(@"[VansonMod] 🔊 静音保活音频已启动");
+  } else {
+    NSLog(@"[VansonMod] ⚠️ 保活音频初始化失败: %@", err);
+  }
+}
+
+- (void)handleAudioInterruption:(NSNotification *)notification {
+  NSDictionary *info = notification.userInfo;
+  AVAudioSessionInterruptionType type =
+      [info[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+  if (type == AVAudioSessionInterruptionTypeEnded) {
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+    if (![self.backgroundPlayer isPlaying]) {
+      [self.backgroundPlayer play];
+    }
+    NSLog(@"[VansonMod] 🔊 音频中断结束，已恢复播放");
   }
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-  __block UIBackgroundTaskIdentifier taskID =
-      [application beginBackgroundTaskWithExpirationHandler:^{
-        [application endBackgroundTask:taskID];
-        taskID = UIBackgroundTaskInvalid;
-      }];
-  if (![self.backgroundPlayer isPlaying])
+  if (![self.backgroundPlayer isPlaying]) {
     [self.backgroundPlayer play];
+  }
+  // 启动自续约后台任务，防止 iOS 过早挂起
+  self.bgTask = UIBackgroundTaskInvalid;
+  [self renewBackgroundTask];
+  NSLog(@"[VansonMod] 🌙 进入后台，保活中...");
+}
+
+// 后台任务自续约 — 到期前重新申请，保持 App 不被挂起
+- (void)renewBackgroundTask {
+  if (self.bgTask != UIBackgroundTaskInvalid) {
+    [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
+  }
+  self.bgTask = [[UIApplication sharedApplication]
+      beginBackgroundTaskWithExpirationHandler:^{
+        [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
+        self.bgTask = UIBackgroundTaskInvalid;
+      }];
+  // 每 150 秒续约 (系统通常给 180 秒)
+  dispatch_after(
+      dispatch_time(DISPATCH_TIME_NOW, 150 * NSEC_PER_SEC),
+      dispatch_get_main_queue(), ^{
+        if (self.bgTask != UIBackgroundTaskInvalid) {
+          [self renewBackgroundTask];
+        }
+      });
+}
+
+- (void)applicationWillEnterForeground:(UIApplication *)application {
+  if (self.bgTask != UIBackgroundTaskInvalid) {
+    [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
+    self.bgTask = UIBackgroundTaskInvalid;
+  }
 }
 
 // iOS 后台 App 刷新回调 — 系统定期唤醒应用以执行此方法
