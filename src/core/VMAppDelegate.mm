@@ -85,6 +85,10 @@
       NSLog(@"[VansonMod] ⚠️ API 服务器启动失败，请检查端口 8848 是否被占用");
   }
 
+  // ---- 注册后台 App 刷新 (进入 iOS 设置 > 后台 App 刷新) ----
+  [[UIApplication sharedApplication] setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalMinimum];
+  NSLog(@"[VansonMod] ✅ 后台 App 刷新已注册");
+
   return YES;
 }
 
@@ -123,6 +127,19 @@
       }];
   if (![self.backgroundPlayer isPlaying])
     [self.backgroundPlayer play];
+}
+
+// iOS 后台 App 刷新回调 — 系统定期唤醒应用以执行此方法
+- (void)application:(UIApplication *)application
+    performFetchWithCompletionHandler:
+        (void (^)(UIBackgroundFetchResult))completionHandler {
+  NSLog(@"[VansonMod] 📡 后台刷新触发，确保服务运行中...");
+  // 确保静音播放器在运行（维持后台存活）
+  if (![self.backgroundPlayer isPlaying]) {
+    [self.backgroundPlayer play];
+  }
+  // 告知系统有新数据可用（实际作用是保持 HTTP 服务存活）
+  completionHandler(UIBackgroundFetchResultNewData);
 }
 
 - (void)applicationWillTerminate:(UIApplication *)application {
