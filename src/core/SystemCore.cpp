@@ -1,5 +1,4 @@
 #include "SystemCore.hpp"
-#include <fcntl.h>
 #include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
 #include <mach-o/loader.h>
@@ -204,43 +203,14 @@ int SystemCore::getPidByBundleID(const std::string &bundleID) {
       if (pid <= 0)
         continue;
 
-      char pathBuffer[4096];
+      char pathBuffer[1024];
       int mib_path[4] = {CTL_KERN, KERN_PROCARGS, pid, 0};
       size_t pathSize = sizeof(pathBuffer);
 
       if (sysctl(mib_path, 4, pathBuffer, &pathSize, NULL, 0) == 0) {
-        std::string fullPath(pathBuffer, pathSize);
-        
-        // 1) 快速回退: 如果路径中恰好包含 bundleID (兼容旧行为)
-        if (fullPath.find(bundleID) != std::string::npos) {
+        if (strstr(pathBuffer, bundleID.c_str())) {
           free(procList);
           return pid;
-        }
-
-        // 2) 通过 Info.plist 精确匹配 bundleID
-        size_t appPos = fullPath.find(".app/");
-        if (appPos != std::string::npos) {
-          std::string bundlePath = fullPath.substr(0, appPos + 4);
-          std::string plistPath = bundlePath + "/Info.plist";
-          
-          // 读取 Info.plist 并查找 CFBundleIdentifier
-          int fd = open(plistPath.c_str(), O_RDONLY);
-          if (fd >= 0) {
-            char plistBuf[8192];
-            ssize_t plistSize = read(fd, plistBuf, sizeof(plistBuf) - 1);
-            close(fd);
-            
-            if (plistSize > 0) {
-              plistBuf[plistSize] = '\0';
-              std::string plistContent(plistBuf, plistSize);
-              
-              // 在 plist 中搜索 bundleID
-              if (plistContent.find(bundleID) != std::string::npos) {
-                free(procList);
-                return pid;
-              }
-            }
-          }
         }
       }
     }

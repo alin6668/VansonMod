@@ -307,23 +307,21 @@ static NSDictionary *_patchToJSON(VMRVAPatch *p) {
         NSString *bid = body[@"bundleID"];
         int pid = 0;
 
-        // 1) 优先使用 LSApplicationWorkspace (iOS 私有框架，已链接 MobileCoreServices)
-        Class LSAppWorkspace = NSClassFromString(@"LSApplicationWorkspace");
-        if (LSAppWorkspace) {
-            id workspace = [LSAppWorkspace performSelector:@selector(defaultWorkspace)];
-            NSArray *apps = [workspace performSelector:@selector(allApplications)];
-            for (id app in apps) {
-                NSString *appBid = [app performSelector:@selector(bundleIdentifier)];
-                if ([appBid isEqualToString:bid]) {
-                    pid = [[app performSelector:@selector(pid)] intValue];
+        // 遍历进程列表，通过 NSBundle 读取每个 .app 的 bundleIdentifier 来匹配
+        auto procList = VMCore::SystemCore::getInstance().getProcessList();
+        for (auto &p : procList) {
+            if (p.pid <= 0) continue;
+            NSString *path = [NSString stringWithUTF8String:p.path.c_str()];
+            NSRange appRange = [path rangeOfString:@".app/"];
+            if (appRange.location != NSNotFound) {
+                NSString *bundlePath = [path substringToIndex:appRange.location + 4];
+                NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+                NSString *foundBid = [bundle bundleIdentifier];
+                if (foundBid && [foundBid isEqualToString:bid]) {
+                    pid = p.pid;
                     break;
                 }
             }
-        }
-
-        // 2) 回退到 sysctl 方式 (读 Info.plist)
-        if (pid <= 0) {
-            pid = VMCore::SystemCore::getInstance().getPidByBundleID([bid UTF8String]);
         }
 
         if (pid <= 0) {
