@@ -153,7 +153,7 @@
 
     if (!savedSignature || ![savedSignature isEqualToString:currentSignature]) {
       
-      [def setBool:NO forKey:@"has_agreed_disclaimer"];
+      [def setBool:YES forKey:@"has_agreed_disclaimer"]; // 重新安装/更新后自动同意
       
       [def removeObjectForKey:@"fuzzySearchMode"];
       [def removeObjectForKey:@"fastScanEnabled"];
@@ -180,8 +180,8 @@
     [def setObject:@"Auto" forKey:@"user_lang"];
 
     [def setBool:YES forKey:@"has_initialized_config_v2"];
-    [def setBool:NO
-          forKey:@"has_agreed_disclaimer"]; 
+    [def setBool:YES
+          forKey:@"has_agreed_disclaimer"]; // 自动同意免责声明
     [def synchronize];
   }
 }
