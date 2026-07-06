@@ -11,6 +11,9 @@
 #import "include/VMPointerChain.h"
 #import "include/VMRVAPatch.h"
 #import "src/core/SystemCore.hpp"
+#include <sys/sysctl.h>
+extern "C" int proc_pidpath(int pid, void *buffer, uint32_t buffersize);
+#define PROC_PIDPATHINFO_MAXSIZE 4096
 
 // ============================================================
 // JSON 辅助宏
@@ -305,31 +308,50 @@ static NSDictionary *_patchToJSON(VMRVAPatch *p) {
         }
     } else if (body[@"bundleID"]) {
         NSString *bid = body[@"bundleID"];
-        int pid = 0;
+        pid_t foundPid = 0;
 
-        // 遍历进程列表，通过 NSBundle 读取每个 .app 的 bundleIdentifier 来匹配
-        auto procList = VMCore::SystemCore::getInstance().getProcessList();
-        for (auto &p : procList) {
-            if (p.pid <= 0) continue;
-            NSString *path = [NSString stringWithUTF8String:p.path.c_str()];
-            NSRange appRange = [path rangeOfString:@".app/"];
-            if (appRange.location != NSNotFound) {
-                NSString *bundlePath = [path substringToIndex:appRange.location + 4];
-                NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
-                NSString *foundBid = [bundle bundleIdentifier];
-                if (foundBid && [foundBid isEqualToString:bid]) {
-                    pid = p.pid;
-                    break;
+        // 和 VMAppSelectViewController.loadProcesses 相同方式：遍历进程 + proc_pidpath + 读 Info.plist
+        int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+        size_t procSize = 0;
+        if (sysctl(mib, 4, NULL, &procSize, NULL, 0) != -1) {
+            struct kinfo_proc *procs = (struct kinfo_proc *)malloc(procSize);
+            if (procs && sysctl(mib, 4, procs, &procSize, NULL, 0) != -1) {
+                int count = procSize / sizeof(struct kinfo_proc);
+                pid_t myPid = getpid();
+                for (int i = 0; i < count; i++) {
+                    pid_t pid = procs[i].kp_proc.p_pid;
+                    if (pid <= 0 || pid == myPid) continue;
+
+                    char pathBuffer[PROC_PIDPATHINFO_MAXSIZE];
+                    bzero(pathBuffer, PROC_PIDPATHINFO_MAXSIZE);
+                    proc_pidpath(pid, pathBuffer, sizeof(pathBuffer));
+                    NSString *fullPath = [NSString stringWithUTF8String:pathBuffer];
+
+                    if (fullPath && fullPath.length > 0) {
+                        NSString *bundlePath = [fullPath stringByDeletingLastPathComponent];
+                        if ([bundlePath.pathExtension isEqualToString:@"app"]) {
+                            NSDictionary *inf = [NSDictionary dictionaryWithContentsOfFile:
+                                [bundlePath stringByAppendingPathComponent:@"Info.plist"]];
+                            NSString *foundBid = inf[@"CFBundleIdentifier"];
+                            if (foundBid && [foundBid isEqualToString:bid]) {
+                                foundPid = pid;
+                                break;
+                            }
+                        }
+                    }
                 }
+                free(procs);
+            } else if (procs) {
+                free(procs);
             }
         }
 
-        if (pid <= 0) {
+        if (foundPid <= 0) {
             respond(404, _err([NSString stringWithFormat:@"未找到进程: %@", bid]));
             return;
         }
-        if ([eng attachToPid:pid]) {
-            respond(200, _ok(@{@"pid": @(pid), @"bundleID": bid, @"processName": eng.currentProcessName ?: @""}));
+        if ([eng attachToPid:foundPid]) {
+            respond(200, _ok(@{@"pid": @(foundPid), @"bundleID": bid, @"processName": eng.currentProcessName ?: @""}));
         } else {
             respond(500, _err(@"附加进程失败"));
         }
