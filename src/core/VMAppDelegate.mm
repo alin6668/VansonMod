@@ -162,9 +162,9 @@
 
 - (void)handleAudioInterruption:(NSNotification *)notification {
   NSDictionary *info = notification.userInfo;
-  AVAudioSessionInterruptionType type =
+  NSUInteger type =
       [info[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
-  if (type == AVAudioSessionInterruptionTypeEnded) {
+  if (type == 0) { // AVAudioSessionInterruptionTypeEnded = 0
     [[AVAudioSession sharedInstance] setActive:YES error:nil];
     if (![self.backgroundPlayer isPlaying]) {
       [self.backgroundPlayer play];
