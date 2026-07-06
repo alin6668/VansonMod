@@ -86,7 +86,11 @@
   }
 
   // ---- 注册后台 App 刷新 (进入 iOS 设置 > 后台 App 刷新) ----
+  // setMinimumBackgroundFetchInterval 在 iOS 13+ 废弃，但仍可正常使用
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
   [[UIApplication sharedApplication] setMinimumBackgroundFetchInterval:UIApplicationBackgroundFetchIntervalMinimum];
+#pragma clang diagnostic pop
   NSLog(@"[VansonMod] ✅ 后台 App 刷新已注册");
 
   return YES;
