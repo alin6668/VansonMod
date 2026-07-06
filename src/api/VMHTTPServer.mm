@@ -193,15 +193,27 @@
             // 提取 query 参数
             req.query = [self parseQuery:req.path];
 
+            // 使用 __block + dispatch_semaphore 支持异步 handler
+            __block BOOL responded = NO;
+            dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+
             matched.handler(req, ^(int code, NSDictionary *json) {
                 [self sendResponse:clientFd code:code json:json];
+                responded = YES;
+                dispatch_semaphore_signal(sema);
             });
+
+            // 等待异步 handler 完成（最长 30 秒）
+            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+
+            // 如果 handler 超时未响应，发送 500
+            if (!responded) {
+                [self sendResponse:clientFd code:500 json:@{@"error": @"Handler timeout"}];
+            }
         } else {
             [self sendResponse:clientFd code:404 json:@{@"error": @"Not found", @"path": req.path}];
         }
 
-        // 等待一下确保发送完成
-        usleep(10000);
         close(clientFd);
     }
 }
