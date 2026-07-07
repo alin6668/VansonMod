@@ -11,6 +11,7 @@
 #import "src/api/VMHTTPServer.h"
 #import "include/VMMemoryEngine.h"
 #import <Foundation/Foundation.h>
+#import <dlfcn.h>
 #import <signal.h>
 #import <unistd.h>
 #import <sys/time.h>
@@ -23,24 +24,33 @@
 // 常量
 static const uint16_t kHTTPPort = 8848;
 
-// ---------------------------------------------------------------------------
-// memorystatus_control — iOS 私有 API (需要 com.apple.private.memorystatus)
-// 设置 Jetsam 优先级，降低被系统杀死的概率
-// ---------------------------------------------------------------------------
+// ============================================================================
+// XPC Transaction — 防止 Jetsam 因"进程空闲"而杀掉 daemon
+//
+// iOS launchd 通过 XPC transaction 跟踪进程是否"活跃"。
+// 没有 transaction → launchd 认为进程空闲 → Jetsam SIGKILL。
+// EnableTransactions=true (plist) 只是启用了 tracking 机制，
+// 进程仍需主动调用 xpc_transaction_begin() 来持有一个 transaction。
+// ============================================================================
+extern void xpc_transaction_begin(void);
+
+// ============================================================================
+// memorystatus_control — iOS 私有 API (dlsym 动态加载, 编译时不依赖符号)
+// 需要 com.apple.private.memorystatus entitlement
+// ============================================================================
 #ifndef MEMORYSTATUS_CMD_SET_PRIORITY
 #define MEMORYSTATUS_CMD_SET_PRIORITY  1
 #define MEMORYSTATUS_CMD_GET_PRIORITY  2
 #endif
 
-// Jetsam 优先级常量 (数值越大越不容易被杀)
 #define JETSAM_PRIORITY_CRITICAL       40
 #define JETSAM_PRIORITY_HIGH           30
 #define JETSAM_PRIORITY_DEFAULT        15
-#define JETSAM_PRIORITY_BACKGROUND     10
 
-// memorystatus_control 声明 (libsystem_kernel.dylib, C 符号)
-extern "C" int memorystatus_control(uint32_t command, int32_t pid,
-                                    uint32_t flags, void *buffer, size_t buffersize);
+typedef int (*memorystatus_control_fn)(uint32_t command, int32_t pid,
+                                       uint32_t flags, void *buffer, size_t buffersize);
+
+static memorystatus_control_fn _memorystatus_control_ptr = NULL;
 
 // ---------------------------------------------------------------------------
 // crash 信号处理 — 记录 crash 日志后用非零退出码退出
@@ -89,29 +99,45 @@ static void uncaughtExceptionHandler(NSException *exception) {
 }
 
 // ---------------------------------------------------------------------------
-// set_jetsam_priority — 将当前进程设为最高 Jetsam 优先级
+// set_jetsam_priority — 动态加载 memorystatus_control 并设置 Jetsam 优先级
 // ---------------------------------------------------------------------------
 static void set_jetsam_priority(void) {
-    int result = memorystatus_control(MEMORYSTATUS_CMD_SET_PRIORITY,
-                                      getpid(),
-                                      JETSAM_PRIORITY_CRITICAL,
-                                      NULL, 0);
+    // dlsym 动态加载（避免直接链接导致的符号依赖问题）
+    void *handle = dlopen(NULL, RTLD_LAZY);
+    if (!handle) {
+        NSLog(@"[vansonmodd] ⚠️ dlopen(NULL) 失败: %s", dlerror());
+        return;
+    }
+
+    _memorystatus_control_ptr = (memorystatus_control_fn)dlsym(handle, "memorystatus_control");
+    if (!_memorystatus_control_ptr) {
+        NSLog(@"[vansonmodd] ⚠️ memorystatus_control 符号不存在 (%s), "
+              "Jetsam 防护不可用", dlerror());
+        dlclose(handle);
+        return;
+    }
+
+    int result = _memorystatus_control_ptr(MEMORYSTATUS_CMD_SET_PRIORITY,
+                                           getpid(),
+                                           JETSAM_PRIORITY_CRITICAL,
+                                           NULL, 0);
     if (result == 0) {
-        // 回读验证
         int32_t current = 0;
-        if (memorystatus_control(MEMORYSTATUS_CMD_GET_PRIORITY,
-                                 getpid(), 0,
-                                 &current, sizeof(current)) == 0) {
-            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级: %d (CRITICAL=%d)",
+        if (_memorystatus_control_ptr(MEMORYSTATUS_CMD_GET_PRIORITY,
+                                      getpid(), 0,
+                                      &current, sizeof(current)) == 0) {
+            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级: %d (目标 CRITICAL=%d)",
                   current, JETSAM_PRIORITY_CRITICAL);
         } else {
-            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级已设置 (验证失败, 可能需 entitlement)");
+            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级已设置");
         }
     } else {
-        NSLog(@"[vansonmodd] ⚠️ Jetsam 优先级设置失败 (errno=%d:%s). "
-              "需要在 entitlements 中添加 com.apple.private.memorystatus",
+        NSLog(@"[vansonmodd] ⚠️ Jetsam 优先级设置失败 (errno=%d:%s), "
+              "将依赖 XPC transaction + Nice 值防护",
               errno, strerror(errno));
     }
+
+    dlclose(handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,17 +193,19 @@ int main(int argc, char *argv[]) {
             signal(kCrashSignals[i], crash_handler);
         }
 
-        // ---- Jetsam 防护 ----
-        setpriority(PRIO_PROCESS, 0, -10);       // UNIX nice 值
-        set_jetsam_priority();                     // iOS Jetsam 优先级
-        // 线程 QoS: 使主线程被调度为 User Interactive 级别
-        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        // ---- Jetsam 防护 (分层策略) ----
+        setpriority(PRIO_PROCESS, 0, -10);         // 1. UNIX nice (兼容)
+        set_jetsam_priority();                     // 2. iOS Jetsam 优先级 API (dlsym)
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); // 3. QoS
+        xpc_transaction_begin();                   // 4. XPC transaction 防空闲 Jetsam kill (关键!)
 
         // ---- 未捕获异常处理 ----
         NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
 
-        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.3.0 启动 (PID=%d) ===", getpid());
+        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.4.0 启动 (PID=%d) ===", getpid());
         NSLog(@"[vansonmodd] HTTP 引擎: ios-mcp dispatch_source 模式");
+        NSLog(@"[vansonmodd] XPC transaction 已持有, Nice=%d, QoS=USER_INTERACTIVE",
+              getpriority(PRIO_PROCESS, 0));
 
         // ---- 注册路由 & 启动 HTTP ----
         [VMAPIRouter registerAllRoutes];
@@ -193,16 +221,14 @@ int main(int argc, char *argv[]) {
         schedule_bootstrap_retries();
 
         // ---- Jetsam 防杀心跳 + 健康日志 + TCP 自检 ----
-        // 每 30 秒执行系统调用保持进程"活跃"状态
+        // 每 15 秒执行一次 (比 30s 更频繁, 更快发现异常)
         __block uint32_t tickCount = 0;
-        [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
+        [NSTimer scheduledTimerWithTimeInterval:15.0 repeats:YES block:^(NSTimer *t) {
             tickCount++;
 
-            // 系统调用刷新进程活跃标记 (Jetsam 跟踪 process activity timeline)
+            // 系统调用刷新进程活跃标记
             struct rusage ru;
             getrusage(RUSAGE_SELF, &ru);
-
-            // 触发 kernel 交互，刷新 Jetsam idle tracking
             pid_t selfPid = getpid();
             kill(selfPid, 0);
 
@@ -210,21 +236,18 @@ int main(int argc, char *argv[]) {
             BOOL serverRunning = [[VMHTTPServer shared] isRunning];
             BOOL portReachable = tcp_port_reachable(kHTTPPort);
 
-            if (tickCount % 2 == 0) {  // 每 60s 打印详细日志
-                // ru_maxrss 在 iOS 上单位是 bytes, /1024 得 KB
-                NSLog(@"[vansonmodd] 💓 #%u | running=%d port=%d | attached=%d pid=%d | "
-                      "results=%lu | mem=%ldKB",
-                      tickCount, serverRunning, portReachable,
-                      eng.targetPid != 0, eng.targetPid,
-                      (unsigned long)eng.resultCount,
-                      ru.ru_maxrss / 1024);
-            }
+            // 每次心跳都打印简要状态
+            NSLog(@"[vansonmodd] 💓 #%u | alive | running=%d port=%d | "
+                  "attached=%d pid=%d | results=%lu | mem=%ldKB",
+                  tickCount, serverRunning, portReachable,
+                  eng.targetPid != 0, eng.targetPid,
+                  (unsigned long)eng.resultCount,
+                  ru.ru_maxrss / 1024);
 
             // ---- 自愈逻辑 ----
-            // isRunning=YES 但端口不可达 → dispatch_source 可能静默失效
             if (serverRunning && !portReachable) {
-                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! "
-                      "dispatch_source 可能失效，重启 HTTP 服务器...", kHTTPPort);
+                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! 重启 HTTP...",
+                      kHTTPPort);
                 [[VMHTTPServer shared] stop];
                 sleep(1);
                 NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
@@ -234,7 +257,6 @@ int main(int argc, char *argv[]) {
                     NSLog(@"[vansonmodd] ❌ HTTP 服务器重启失败!");
                 }
             }
-            // isRunning=NO → 服务器完全停止
             else if (!serverRunning) {
                 NSLog(@"[vansonmodd] ⚠️ HTTP 服务器已停止，尝试恢复...");
                 NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
