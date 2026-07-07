@@ -31,8 +31,26 @@ static const uint16_t kHTTPPort = 8848;
 // 没有 transaction → launchd 认为进程空闲 → Jetsam SIGKILL。
 // EnableTransactions=true (plist) 只是启用了 tracking 机制，
 // 进程仍需主动调用 xpc_transaction_begin() 来持有一个 transaction。
+//
+// 注意: xpc_transaction_begin 在 iOS SDK 被标记 unavailable，
+// 但实际存在于 libxpc.dylib 中，通过 dlsym 动态加载。
 // ============================================================================
-extern void xpc_transaction_begin(void);
+static void begin_xpc_transaction(void) {
+    void *xpcLib = dlopen("/usr/lib/system/libxpc.dylib", RTLD_LAZY);
+    if (!xpcLib) {
+        NSLog(@"[vansonmodd] ⚠️ 无法加载 libxpc.dylib: %s", dlerror());
+        return;
+    }
+    typedef void (*xpc_txn_fn)(void);
+    xpc_txn_fn txn_begin = (xpc_txn_fn)dlsym(xpcLib, "xpc_transaction_begin");
+    if (txn_begin) {
+        txn_begin();
+        NSLog(@"[vansonmodd] 🛡️ XPC transaction 已持有");
+    } else {
+        NSLog(@"[vansonmodd] ⚠️ xpc_transaction_begin 符号不存在 (%s)", dlerror());
+    }
+    dlclose(xpcLib);
+}
 
 // ============================================================================
 // memorystatus_control — iOS 私有 API (dlsym 动态加载, 编译时不依赖符号)
@@ -197,14 +215,14 @@ int main(int argc, char *argv[]) {
         setpriority(PRIO_PROCESS, 0, -10);         // 1. UNIX nice (兼容)
         set_jetsam_priority();                     // 2. iOS Jetsam 优先级 API (dlsym)
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0); // 3. QoS
-        xpc_transaction_begin();                   // 4. XPC transaction 防空闲 Jetsam kill (关键!)
+        begin_xpc_transaction();                   // 4. XPC transaction 防空闲 Jetsam kill (关键!)
 
         // ---- 未捕获异常处理 ----
         NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
 
         NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.4.0 启动 (PID=%d) ===", getpid());
         NSLog(@"[vansonmodd] HTTP 引擎: ios-mcp dispatch_source 模式");
-        NSLog(@"[vansonmodd] XPC transaction 已持有, Nice=%d, QoS=USER_INTERACTIVE",
+        NSLog(@"[vansonmodd] Nice=%d, QoS=USER_INTERACTIVE",
               getpriority(PRIO_PROCESS, 0));
 
         // ---- 注册路由 & 启动 HTTP ----
