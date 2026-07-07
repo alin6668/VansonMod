@@ -20,9 +20,24 @@
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
     <key>POSIXSpawnType</key>
     <string>Adaptive</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>-5</integer>
+    <key>LowPriorityIO</key>
+    <false/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>ExitTimeOut</key>
+    <integer>5</integer>
     <key>StandardOutPath</key>
     <string>/var/jb/var/log/vansonmodd.log</string>
     <key>StandardErrorPath</key>

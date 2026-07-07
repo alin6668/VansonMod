@@ -156,6 +156,13 @@
         int clientFd = accept(self.serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
         if (clientFd < 0) {
             if (!self.running) break;
+            if (errno == EINTR) continue;        // 信号中断，重试
+            if (errno == EBADF || errno == EINVAL) {
+                NSLog(@"[VansonMod API] accept 错误: %s (serverSocket=%d), 停止接收循环", strerror(errno), self.serverSocket);
+                break;
+            }
+            // 其他错误：短暂休眠后重试，防止 busy-loop
+            usleep(100000);  // 100ms
             continue;
         }
 

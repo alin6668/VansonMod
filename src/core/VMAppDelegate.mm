@@ -7,7 +7,6 @@
 #import "include/VMPointerManager.h"
 #import "src/utils/helpers/VMUIHelper.h"
 #import "src/utils/managers/VMImportHandler.h"
-#import "src/api/VMAPIRouter.h"
 #import <UIKit/UIKit.h>
 
 #define TR(key) ([[VMLocalization shared] localizedString:key])
@@ -71,14 +70,9 @@
     [UITabBar appearance].scrollEdgeAppearance = tabAppearance;
   }
 
-  // ---- 启动 HTTP API 服务器 (当守护进程未安装时的备用方案) ----
-  [VMAPIRouter registerAllRoutes];
-  NSString *apiURL = [VMAPIRouter startServerOnPort:8848];
-  if (apiURL) {
-      NSLog(@"[VansonMod] ✅ API 服务器已启动: %@", apiURL);
-  } else {
-      NSLog(@"[VansonMod] ℹ️ 端口 8848 已被占用 (守护进程 vansonmodd 可能已在运行)");
-  }
+  // HTTP API 由守护进程 vansonmodd 独立提供
+  // App 作为 UI 客户端，直接调用 VMMemoryEngine (同进程)，无需启动 HTTP 服务器
+  NSLog(@"[VansonMod] ✅ App 已启动 (HTTP API 由守护进程 vansonmodd 提供)");
 
   return YES;
 }
