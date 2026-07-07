@@ -14,6 +14,9 @@
 #import <unistd.h>
 #import <sys/time.h>
 #import <sys/resource.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 
 static void handle_signal(int sig) {
     NSLog(@"[vansonmodd] 收到信号 %d (%s)，正在退出...", sig, strsignal(sig));
@@ -57,9 +60,8 @@ int main(int argc, char *argv[]) {
         }
 
         // ================================================================
-        // 防 Jetsam 心跳: 每 10 秒执行实际系统调用
-        // iOS Jetsam ~30 秒杀死"空闲"进程，但 accept() 阻塞不被视为活动。
-        // 10 秒间隔确保在 Jetsam 超时前刷新进程活跃状态。
+        // 防 Jetsam + 存活自检 心跳: 每 10 秒
+        // 使用真实 TCP 连接自检端口，检测 accept 线程是否已死。
         // ================================================================
         __block uint32_t tickCount = 0;
         [NSTimer scheduledTimerWithTimeInterval:10.0 repeats:YES block:^(NSTimer *t) {
@@ -72,17 +74,51 @@ int main(int argc, char *argv[]) {
             VMMemoryEngine *eng = [VMMemoryEngine shared];
             BOOL isRunning = [[VMHTTPServer shared] isRunning];
 
+            // ---- 真实 TCP 端口连通性自检 ----
+            // 仅检查 isRunning 是不够的：dispatch_source 可能已被系统回收，
+            // self.running 和 self.serverSocket 仍有效，但 accept 已不可用。
+            BOOL portReachable = NO;
+            int testFd = socket(AF_INET, SOCK_STREAM, 0);
+            if (testFd >= 0) {
+                struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
+                setsockopt(testFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+                setsockopt(testFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+                struct sockaddr_in addr = {0};
+                addr.sin_family = AF_INET;
+                addr.sin_port = htons(8848);
+                inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+                if (connect(testFd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+                    portReachable = YES;
+                }
+                close(testFd);
+            }
+
             if (tickCount % 6 == 0) {  // 每 60 秒打印一次详细日志
-                NSLog(@"[vansonmodd] 💓 心跳 #%u | running=%d | attached=%d | pid=%d | "
-                      "results=%lu | mem=%ldMB",
-                      tickCount, isRunning,
+                NSLog(@"[vansonmodd] 💓 心跳 #%u | running=%d | accept=%d | "
+                      "attached=%d | pid=%d | results=%lu | mem=%ldMB",
+                      tickCount, isRunning, portReachable,
                       eng.targetPid != 0, eng.targetPid,
                       (unsigned long)eng.resultCount,
                       ru.ru_maxrss / 1024);
             }
 
-            // 如果服务器意外停止，尝试重启
-            if (!isRunning) {
+            // 如果服务器报告运行中但不能 TCP 连接 → accept 线程已死
+            if (isRunning && !portReachable) {
+                NSLog(@"[vansonmodd] ⚠️ HTTP 返回 running=YES 但端口 %d 不可达！"
+                      " accept source 可能已死，重启服务器...", 8848);
+                [VMAPIRouter stopServer];
+                sleep(1);
+                NSString *newURL = [VMAPIRouter startServerOnPort:8848];
+                if (newURL) {
+                    NSLog(@"[vansonmodd] ✅ HTTP 服务器已重启: %@", newURL);
+                } else {
+                    NSLog(@"[vansonmodd] ❌ HTTP 服务器重启失败！");
+                }
+            }
+            // 如果服务器完全停止（正常运行检测到的停止）
+            else if (!isRunning) {
                 NSLog(@"[vansonmodd] ⚠️ HTTP 服务器已停止！尝试重启...");
                 NSString *newURL = [VMAPIRouter startServerOnPort:8848];
                 if (newURL) {

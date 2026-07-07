@@ -37,6 +37,7 @@
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong) NSMutableArray<VMRouteEntry *> *routes;
 @property (nonatomic, copy)   NSString *serverURL;
+@property (nonatomic, assign) dispatch_source_t acceptSource;  // dispatch_source 接收事件源
 @end
 
 @implementation VMHTTPServer
@@ -117,26 +118,90 @@
     NSString *localIP = [self getWiFiIP];
     self.serverURL = [NSString stringWithFormat:@"http://%@:%d", localIP ?: @"127.0.0.1", port];
 
-    // 启动接收线程
+    // ================================================================
+    // 使用 dispatch_source 代替阻塞 accept() 循环
+    // 原因: GCD 全局队列线程会被 iOS 系统回收/杀死，导致 accept 线程
+    //       静默退出（主线程 timer 仍运行，running=YES 但无法接收连接）。
+    //       dispatch_source 是事件驱动，集成在主队列的 runloop 中，
+    //       不会被 iOS 回收，资源占用也更低。
+    // ================================================================
+    dispatch_source_t src = dispatch_source_create(
+        DISPATCH_SOURCE_TYPE_READ,
+        (uintptr_t)sock, 0,
+        dispatch_get_main_queue()   // ← 主队列 = 有 runloop 保活
+    );
+
     __weak __typeof__(self) weakSelf = self;
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-        [weakSelf acceptLoop];
+    dispatch_source_set_event_handler(src, ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        // 循环 accept 直到没有更多连接（避免遗漏积压连接）
+        while (1) {
+            struct sockaddr_in clientAddr;
+            socklen_t clientLen = sizeof(clientAddr);
+            int clientFd = accept(strongSelf.serverSocket,
+                                  (struct sockaddr *)&clientAddr, &clientLen);
+            if (clientFd < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) break; // 无更多连接
+                if (errno == EINTR) continue;                       // 信号中断，重试
+                if (errno == EBADF || errno == EINVAL) {
+                    NSLog(@"[VansonMod API] accept 致命错误: %s, 停止接收",
+                          strerror(errno));
+                    dispatch_source_cancel(src);
+                    return;
+                }
+                break;
+            }
+
+            // 设置超时
+            struct timeval tv;
+            tv.tv_sec = 10;
+            tv.tv_usec = 0;
+            setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+            // 在后台队列处理客户端请求
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                [strongSelf handleClient:clientFd];
+            });
+        }
     });
+
+    dispatch_source_set_cancel_handler(src, ^{
+        __strong __typeof__(weakSelf) strongSelf = weakSelf;
+        if (strongSelf && strongSelf.serverSocket >= 0) {
+            close(strongSelf.serverSocket);
+            strongSelf.serverSocket = -1;
+        }
+        NSLog(@"[VansonMod API] accept source 已取消");
+    });
+
+    dispatch_resume(src);
+    self.acceptSource = src;
+
+    NSLog(@"[VansonMod API] ✅ accept dispatch_source 已启动 (main queue)");
 
     return self.serverURL;
 }
 
 - (void)stop {
     self.running = NO;
-    if (self.serverSocket >= 0) {
+
+    // 取消 dispatch_source（会自动 close socket）
+    if (self.acceptSource) {
+        dispatch_source_cancel(self.acceptSource);
+        self.acceptSource = nil;
+    } else if (self.serverSocket >= 0) {
         close(self.serverSocket);
         self.serverSocket = -1;
     }
+
     self.serverURL = nil;
 }
 
 - (BOOL)isRunning {
-    return self.running && self.serverSocket >= 0;
+    return self.running && self.acceptSource != nil && self.serverSocket >= 0;
 }
 
 - (void)on:(NSString *)method path:(NSString *)path handler:(VMHTTPHandler)handler {
@@ -145,39 +210,6 @@
     entry.path = path;
     entry.handler = handler;
     [self.routes addObject:entry];
-}
-
-#pragma mark - Accept Loop
-
-- (void)acceptLoop {
-    while (self.running) {
-        struct sockaddr_in clientAddr;
-        socklen_t clientLen = sizeof(clientAddr);
-        int clientFd = accept(self.serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
-        if (clientFd < 0) {
-            if (!self.running) break;
-            if (errno == EINTR) continue;        // 信号中断，重试
-            if (errno == EBADF || errno == EINVAL) {
-                NSLog(@"[VansonMod API] accept 错误: %s (serverSocket=%d), 停止接收循环", strerror(errno), self.serverSocket);
-                break;
-            }
-            // 其他错误：短暂休眠后重试，防止 busy-loop
-            usleep(100000);  // 100ms
-            continue;
-        }
-
-        // 设置超时
-        struct timeval tv;
-        tv.tv_sec = 10;
-        tv.tv_usec = 0;
-        setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-        __weak __typeof__(self) weakSelf = self;
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [weakSelf handleClient:clientFd];
-        });
-    }
 }
 
 #pragma mark - Client Handler
