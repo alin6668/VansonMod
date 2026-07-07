@@ -32,9 +32,9 @@
 #define JETSAM_PRIORITY_DEFAULT        15
 #define JETSAM_PRIORITY_BACKGROUND     10
 
-// memorystatus_control 声明 (私有框架)
-extern int memorystatus_control(uint32_t command, int32_t pid,
-                                uint32_t flags, void *buffer, size_t buffersize);
+// memorystatus_control 声明 (libsystem_kernel.dylib, C 符号)
+extern "C" int memorystatus_control(uint32_t command, int32_t pid,
+                                    uint32_t flags, void *buffer, size_t buffersize);
 
 // ---------------------------------------------------------------------------
 // crash 信号处理 — 记录 crash 日志后用非零退出码退出
