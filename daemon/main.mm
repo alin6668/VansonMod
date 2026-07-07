@@ -7,10 +7,13 @@
 //
 
 #import "src/api/VMAPIRouter.h"
+#import "src/api/VMHTTPServer.h"
 #import "include/VMMemoryEngine.h"
 #import <Foundation/Foundation.h>
 #import <signal.h>
 #import <unistd.h>
+#import <sys/time.h>
+#import <sys/resource.h>
 
 static void handle_signal(int sig) {
     NSLog(@"[vansonmodd] 收到信号 %d (%s)，正在退出...", sig, strsignal(sig));
@@ -22,7 +25,6 @@ static void handle_signal(int sig) {
 static void uncaughtExceptionHandler(NSException *exception) {
     NSLog(@"[vansonmodd] ❌ 未捕获异常: %@\n%@", exception.name, exception.reason);
     NSLog(@"[vansonmodd] 调用栈:\n%@", exception.callStackSymbols);
-    // 让 launchd 的 KeepAlive 重启我们
     exit(EXIT_FAILURE);
 }
 
@@ -34,10 +36,13 @@ int main(int argc, char *argv[]) {
         signal(SIGPIPE, SIG_IGN);  // 忽略 SIGPIPE，防止写入关闭的 socket 时崩溃
         signal(SIGHUP,  SIG_IGN);  // 忽略终端挂断
 
+        // 提高进程优先级，降低被 Jetsam 杀死的概率
+        setpriority(PRIO_PROCESS, 0, -10);
+
         // 未捕获异常处理 → 崩溃时输出日志并退出，让 launchd 重启
         NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
 
-        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.1.2 启动 (PID=%d) ===", getpid());
+        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.1.3 启动 (PID=%d) ===", getpid());
 
         // 注册所有 /api/* 路由
         [VMAPIRouter registerAllRoutes];
@@ -51,11 +56,41 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // 每 60 秒打印心跳，方便排查守护进程是否存活
-        [NSTimer scheduledTimerWithTimeInterval:60.0 repeats:YES block:^(NSTimer *t) {
+        // ================================================================
+        // 防 Jetsam 心跳: 每 10 秒执行实际系统调用
+        // iOS Jetsam ~30 秒杀死"空闲"进程，但 accept() 阻塞不被视为活动。
+        // 10 秒间隔确保在 Jetsam 超时前刷新进程活跃状态。
+        // ================================================================
+        __block uint32_t tickCount = 0;
+        [NSTimer scheduledTimerWithTimeInterval:10.0 repeats:YES block:^(NSTimer *t) {
+            tickCount++;
+
+            // 执行系统调用刷新进程活跃状态 (Jetsam 跟踪这些)
+            struct rusage ru;
+            getrusage(RUSAGE_SELF, &ru);
+
             VMMemoryEngine *eng = [VMMemoryEngine shared];
-            NSLog(@"[vansonmodd] 💓 心跳 | attached=%d | pid=%d | results=%lu",
-                  eng.targetPid != 0, eng.targetPid, (unsigned long)eng.resultCount);
+            BOOL isRunning = [[VMHTTPServer shared] isRunning];
+
+            if (tickCount % 6 == 0) {  // 每 60 秒打印一次详细日志
+                NSLog(@"[vansonmodd] 💓 心跳 #%u | running=%d | attached=%d | pid=%d | "
+                      "results=%lu | mem=%ldMB",
+                      tickCount, isRunning,
+                      eng.targetPid != 0, eng.targetPid,
+                      (unsigned long)eng.resultCount,
+                      ru.ru_maxrss / 1024);
+            }
+
+            // 如果服务器意外停止，尝试重启
+            if (!isRunning) {
+                NSLog(@"[vansonmodd] ⚠️ HTTP 服务器已停止！尝试重启...");
+                NSString *newURL = [VMAPIRouter startServerOnPort:8848];
+                if (newURL) {
+                    NSLog(@"[vansonmodd] ✅ HTTP 服务器已重启: %@", newURL);
+                } else {
+                    NSLog(@"[vansonmodd] ❌ HTTP 服务器重启失败！");
+                }
+            }
         }];
 
         // 持续运行

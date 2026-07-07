@@ -26,18 +26,16 @@
         <key>NetworkState</key>
         <true/>
     </dict>
-    <key>POSIXSpawnType</key>
-    <string>Adaptive</string>
-    <key>ProcessType</key>
-    <string>Background</string>
+    <!-- 关键: 不加 ProcessType → 默认 Interactive 优先级，Jetsam 不轻易杀 -->
+    <!-- 不加 POSIXSpawnType → 不用 Adaptive，防止 launchd 自行管理生命周期 -->
+    <key>EnablePressuredExit</key>
+    <false/>
     <key>Nice</key>
     <integer>-5</integer>
     <key>LowPriorityIO</key>
     <false/>
-    <key>ThrottleInterval</key>
-    <integer>5</integer>
     <key>ExitTimeOut</key>
-    <integer>5</integer>
+    <integer>10</integer>
     <key>StandardOutPath</key>
     <string>/var/jb/var/log/vansonmodd.log</string>
     <key>StandardErrorPath</key>
