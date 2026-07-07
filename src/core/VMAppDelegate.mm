@@ -10,6 +10,7 @@
 #import "src/api/VMAPIRouter.h"
 #import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
+#import <math.h>
 
 #define TR(key) ([[VMLocalization shared] localizedString:key])
 
@@ -18,8 +19,7 @@
 @property(nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
 - (void)checkAppReinstallOrUpdate;
 - (void)setupDefaultSettingsIfNeeded;
-- (void)startBackgroundKeepAlive;
-- (void)stopBackgroundKeepAlive;
+- (void)startKeepAlive;
 - (void)renewBackgroundTask;
 @end
 
@@ -77,6 +77,9 @@
     [UITabBar appearance].scrollEdgeAppearance = tabAppearance;
   }
 
+  // ---- 启动静音音频保活 (从启动就播放，确保进入后台时音频已在运行) ----
+  [self startKeepAlive];
+
   // ---- 启动 HTTP API 服务器 (供 AUTOGO 远程调用) ----
   [VMAPIRouter registerAllRoutes];
   NSString *apiURL = [VMAPIRouter startServerOnPort:8848];
@@ -98,38 +101,40 @@
 }
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-  // 启动静音音频保活 → 保持 HTTP 服务 + 内存锁定在后台持续运行
-  [self startBackgroundKeepAlive];
-  // 启动自续约后台任务，双重保险
+  // 确保静音音频在后台持续播放
+  if (![self.backgroundPlayer isPlaying]) {
+    [self.backgroundPlayer play];
+  }
+  // 自续约后台任务，双重保险
   self.bgTask = UIBackgroundTaskInvalid;
   [self renewBackgroundTask];
-  NSLog(@"[VansonMod] 🌙 进入后台，保活已启动...");
+  NSLog(@"[VansonMod] 🌙 进入后台，保活运行中...");
 }
 
-#pragma mark - 后台保活（仅后台期间启用，前台自动停止）
+#pragma mark - 静音音频保活（持续播放，防止 iOS 挂起进程）
 
-- (void)startBackgroundKeepAlive {
-  if (self.backgroundPlayer && [self.backgroundPlayer isPlaying]) return;
-
+- (void)startKeepAlive {
   [[AVAudioSession sharedInstance]
       setCategory:AVAudioSessionCategoryPlayback
       withOptions:AVAudioSessionCategoryOptionMixWithOthers
             error:nil];
   [[AVAudioSession sharedInstance] setActive:YES error:nil];
 
-  // 监听音频中断，自动恢复播放
+  // 监听音频中断，自动恢复
   [[NSNotificationCenter defaultCenter]
       addObserver:self
          selector:@selector(handleAudioInterruption:)
              name:AVAudioSessionInterruptionNotification
            object:nil];
 
-  // 生成 2 秒静音 WAV (44100Hz, 16-bit, mono)
+  // 生成 2 秒微弱正弦波 WAV (44100Hz, 16-bit, mono)
+  // 使用 0.0001 振幅的 1Hz 正弦波，完全不可闻但防止 iOS 检测为纯静音
   int sampleRate = 44100;
   int bitsPerSample = 16;
   int channels = 1;
   int durationSeconds = 2;
-  int dataSize = sampleRate * (bitsPerSample / 8) * channels * durationSeconds;
+  int sampleCount = sampleRate * channels * durationSeconds;
+  int dataSize = sampleCount * (bitsPerSample / 8);
 
   NSMutableData *wav = [NSMutableData data];
   uint32_t fileSize = 36 + dataSize;
@@ -153,7 +158,15 @@
   [wav appendBytes:&bps length:2];
   [wav appendBytes:"data" length:4];
   [wav appendBytes:&dataSize length:4];
-  [wav appendData:[NSMutableData dataWithLength:dataSize]];
+
+  // 写入微小声波数据（非纯静音，防止iOS静音检测）
+  int16_t *samples = (int16_t *)malloc(dataSize);
+  for (int i = 0; i < sampleCount; i++) {
+    // 0.0001f 振幅 → 峰峰值约 ±3 个量化单位，完全不可闻
+    samples[i] = (int16_t)(sin(2.0 * M_PI * 1.0 * i / sampleRate) * 0.0001f * 32767.0);
+  }
+  [wav appendBytes:samples length:dataSize];
+  free(samples);
 
   NSError *err;
   self.backgroundPlayer = [[AVAudioPlayer alloc] initWithData:wav error:&err];
@@ -162,25 +175,10 @@
     self.backgroundPlayer.volume = 0.01;
     [self.backgroundPlayer prepareToPlay];
     [self.backgroundPlayer play];
-    NSLog(@"[VansonMod] 🔊 后台静音保活已启动");
+    NSLog(@"[VansonMod] 🔊 静音保活音频已启动 (持续模式)");
   } else {
     NSLog(@"[VansonMod] ⚠️ 保活音频初始化失败: %@", err);
   }
-}
-
-- (void)stopBackgroundKeepAlive {
-  if (self.backgroundPlayer) {
-    [self.backgroundPlayer stop];
-    self.backgroundPlayer = nil;
-  }
-  [[NSNotificationCenter defaultCenter]
-      removeObserver:self
-                name:AVAudioSessionInterruptionNotification
-              object:nil];
-  [[AVAudioSession sharedInstance] setActive:NO
-                                 withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                                       error:nil];
-  NSLog(@"[VansonMod] 🔇 后台保活已停止");
 }
 
 - (void)handleAudioInterruption:(NSNotification *)notification {
@@ -192,7 +190,7 @@
     if (![self.backgroundPlayer isPlaying]) {
       [self.backgroundPlayer play];
     }
-    NSLog(@"[VansonMod] 🔊 音频中断结束，已恢复保活播放");
+    NSLog(@"[VansonMod] 🔊 音频中断结束，已恢复保活");
   }
 }
 
@@ -217,19 +215,17 @@
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
-  // 回到前台 → 停止静音保活（前台不需要）
-  [self stopBackgroundKeepAlive];
   if (self.bgTask != UIBackgroundTaskInvalid) {
     [[UIApplication sharedApplication] endBackgroundTask:self.bgTask];
     self.bgTask = UIBackgroundTaskInvalid;
   }
 }
 
-// iOS 后台 App 刷新回调 — 系统定期唤醒应用以执行此方法
+// iOS 后台 App 刷新回调 — 系统定期唤醒应用
 - (void)application:(UIApplication *)application
     performFetchWithCompletionHandler:
         (void (^)(UIBackgroundFetchResult))completionHandler {
-  NSLog(@"[VansonMod] 📡 后台刷新触发，确保保活运行中...");
+  NSLog(@"[VansonMod] 📡 后台刷新触发");
   if (![self.backgroundPlayer isPlaying]) {
     [self.backgroundPlayer play];
   }
