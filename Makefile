@@ -150,6 +150,12 @@ before-package::
 # 打包脚本
 # ============================================================
 after-package::
+	@echo "正在收集产物到 packages/ ..."
+	@mkdir -p packages
+	@# 收集 DEB (Theos 可能放在根目录或 .theos 里)
+	@find . .theos -maxdepth 2 -name "*.deb" -type f 2>/dev/null | while read deb; do \
+		cp -v "$$deb" packages/; \
+	done
 ifeq ($(SKIP_TIPA),1)
 	@echo "跳过 TIPA..."
 else
@@ -170,3 +176,6 @@ else
 	@rm -rf Payload
 	@echo "打包完成！"
 endif
+	@echo ""
+	@echo "===== packages/ 产物 ====="
+	@ls -lh packages/
