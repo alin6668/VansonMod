@@ -124,9 +124,9 @@
     _acceptSource = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_READ, (uintptr_t)sock, 0, acceptQueue);
 
-    __weak typeof(self) weakSelf = self;
+    __weak __typeof__(self) weakSelf = self;
     dispatch_source_set_event_handler(_acceptSource, ^{
-        __strong typeof(weakSelf) self = weakSelf;
+        __strong __typeof__(weakSelf) self = weakSelf;
         if (!self) return;
 
         // ios-mcp: 每次事件 accept 一次, 错误直接忽略
