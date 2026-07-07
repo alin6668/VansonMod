@@ -15,7 +15,13 @@
 #import <unistd.h>
 #import <sys/time.h>
 #import <sys/resource.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 #import <pthread/qos.h>
+
+// 常量
+static const uint16_t kHTTPPort = 8848;
 
 // ---------------------------------------------------------------------------
 // memorystatus_control — iOS 私有 API (需要 com.apple.private.memorystatus)
@@ -119,12 +125,34 @@ static void schedule_bootstrap_retries(void) {
                        dispatch_get_main_queue(), ^{
             if ([[VMHTTPServer shared] isRunning]) return;
             NSLog(@"[vansonmodd] 🔄 启动重试 #%d (延迟 %.1fs)...", i + 1, delays[i]);
-            NSString *url = [VMAPIRouter startServerOnPort:8848];
+            NSString *url = [VMAPIRouter startServerOnPort:kHTTPPort];
             if (url) {
                 NSLog(@"[vansonmodd] ✅ 重试成功: %@", url);
             }
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// tcp_port_reachable — 真实 TCP 连通性检查
+// 比 isRunning 更可靠，能检测 dispatch_source 静默失效
+// ---------------------------------------------------------------------------
+static BOOL tcp_port_reachable(uint16_t port) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return NO;
+
+    struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+
+    BOOL ok = (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0);
+    close(fd);
+    return ok;
 }
 
 int main(int argc, char *argv[]) {
@@ -154,7 +182,7 @@ int main(int argc, char *argv[]) {
         // ---- 注册路由 & 启动 HTTP ----
         [VMAPIRouter registerAllRoutes];
 
-        NSString *url = [VMAPIRouter startServerOnPort:8848];
+        NSString *url = [VMAPIRouter startServerOnPort:kHTTPPort];
         if (url) {
             NSLog(@"[vansonmodd] ✅ HTTP API 已启动: %@", url);
         } else {
@@ -164,42 +192,63 @@ int main(int argc, char *argv[]) {
         // ios-mcp 风格: 多轮延迟重试
         schedule_bootstrap_retries();
 
-        // ---- Jetsam 防杀心跳 + 健康日志 ----
-        // 每 30 秒执行系统调用保持进程"活跃"状态，同时打印日志
+        // ---- Jetsam 防杀心跳 + 健康日志 + TCP 自检 ----
+        // 每 30 秒执行系统调用保持进程"活跃"状态
         __block uint32_t tickCount = 0;
         [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
             tickCount++;
 
-            // 系统调用刷新进程活跃标记 (Jetsam 会跟踪进程 activity timeline)
+            // 系统调用刷新进程活跃标记 (Jetsam 跟踪 process activity timeline)
             struct rusage ru;
             getrusage(RUSAGE_SELF, &ru);
 
-            // 触发一次 kernel 交互，刷新 Jetsam 的 idle tracking
+            // 触发 kernel 交互，刷新 Jetsam idle tracking
             pid_t selfPid = getpid();
-            kill(selfPid, 0);  // signal 0 = 权限检查，无副作用，但产生 syscall
+            kill(selfPid, 0);
 
             VMMemoryEngine *eng = [VMMemoryEngine shared];
-            BOOL serverAlive = [[VMHTTPServer shared] isRunning];
+            BOOL serverRunning = [[VMHTTPServer shared] isRunning];
+            BOOL portReachable = tcp_port_reachable(kHTTPPort);
 
             if (tickCount % 2 == 0) {  // 每 60s 打印详细日志
                 // ru_maxrss 在 iOS 上单位是 bytes, /1024 得 KB
-                NSLog(@"[vansonmodd] 💓 #%u | running=%d | attached=%d | pid=%d | "
+                NSLog(@"[vansonmodd] 💓 #%u | running=%d port=%d | attached=%d pid=%d | "
                       "results=%lu | mem=%ldKB",
-                      tickCount, serverAlive,
+                      tickCount, serverRunning, portReachable,
                       eng.targetPid != 0, eng.targetPid,
                       (unsigned long)eng.resultCount,
                       ru.ru_maxrss / 1024);
             }
 
-            // 如果服务器意外停止，尝试自动恢复
-            if (!serverAlive) {
+            // ---- 自愈逻辑 ----
+            // isRunning=YES 但端口不可达 → dispatch_source 可能静默失效
+            if (serverRunning && !portReachable) {
+                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! "
+                      "dispatch_source 可能失效，重启 HTTP 服务器...", kHTTPPort);
+                [[VMHTTPServer shared] stop];
+                sleep(1);
+                NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
+                if (newURL) {
+                    NSLog(@"[vansonmodd] ✅ HTTP 服务器已重启: %@", newURL);
+                } else {
+                    NSLog(@"[vansonmodd] ❌ HTTP 服务器重启失败!");
+                }
+            }
+            // isRunning=NO → 服务器完全停止
+            else if (!serverRunning) {
                 NSLog(@"[vansonmodd] ⚠️ HTTP 服务器已停止，尝试恢复...");
-                NSString *newURL = [VMAPIRouter startServerOnPort:8848];
+                NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
                 if (newURL) {
                     NSLog(@"[vansonmodd] ✅ 服务器已恢复: %@", newURL);
                 }
             }
         }];
+
+        // 持续运行
+        [[NSRunLoop currentRunLoop] run];
+    }
+    return 0;
+}
 
         // 持续运行
         [[NSRunLoop currentRunLoop] run];

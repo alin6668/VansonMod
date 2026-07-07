@@ -161,10 +161,25 @@
 
             // 派发到 clientQueue 并发处理 (ios-mcp 风格)
             dispatch_async(self->_clientQueue, ^{
-                [self handleClient:client];
+                @autoreleasepool {
+                    [self handleClient:client];
+                }
             });
+        } else {
+            // accept 失败 → 记录错误用于诊断
+            int err = errno;
+            if (err == EBADF || err == EINVAL || err == ENOTSOCK) {
+                // 致命错误: socket 已失效，停止接收
+                NSLog(@"[VansonMod API] ❌ accept 致命错误: %s (errno=%d), 停止接收",
+                      strerror(err), err);
+                dispatch_source_cancel(self->_acceptSource);
+            } else if (err != EAGAIN && err != EWOULDBLOCK && err != EINTR) {
+                // 意外错误，记录日志
+                NSLog(@"[VansonMod API] ⚠️ accept 错误: %s (errno=%d)",
+                      strerror(err), err);
+            }
+            // EAGAIN/EWOULDBLOCK/EINTR: 正常，等待下次事件
         }
-        // accept 失败时不处理，dispatch_source 会在 socket 再次可读时重试
     });
 
     // ios-mcp: cancel_handler 只负责关 socket
@@ -212,16 +227,25 @@
 
 - (void)handleClient:(int)clientFd {
     @autoreleasepool {
-        // 读取请求
-        char buffer[65536];
-        memset(buffer, 0, sizeof(buffer));
-        ssize_t bytesRead = recv(clientFd, buffer, sizeof(buffer) - 1, 0);
+        // 堆分配缓冲区 (避免 64KB 栈溢出崩溃)
+        #define HTTP_RECV_BUF_SIZE 65536
+        char *buffer = (char *)malloc(HTTP_RECV_BUF_SIZE);
+        if (!buffer) {
+            close(clientFd);
+            return;
+        }
+
+        memset(buffer, 0, HTTP_RECV_BUF_SIZE);
+        ssize_t bytesRead = recv(clientFd, buffer, HTTP_RECV_BUF_SIZE - 1, 0);
         if (bytesRead <= 0) {
+            free(buffer);
             close(clientFd);
             return;
         }
 
         NSString *rawRequest = [[NSString alloc] initWithBytes:buffer length:bytesRead encoding:NSUTF8StringEncoding];
+        free(buffer);
+
         if (!rawRequest) {
             [self sendResponse:clientFd code:400 json:@{@"error": @"Invalid UTF-8"}];
             close(clientFd);
