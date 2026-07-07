@@ -249,9 +249,3 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
-
-        // 持续运行
-        [[NSRunLoop currentRunLoop] run];
-    }
-    return 0;
-}
