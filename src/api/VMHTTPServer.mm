@@ -76,9 +76,10 @@
         return nil;
     }
 
-    // 2. SO_REUSEADDR — 允许快速重启
+    // 2. SO_REUSEADDR + SO_REUSEPORT — 允许快速重启/重绑定
     int optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
 
     // 3. TCP KeepAlive — 防止 NAT 映射超时
     int keepalive = 1;
@@ -104,7 +105,7 @@
     }
 
     // 5. listen
-    if (listen(sock, 8) < 0) {
+    if (listen(sock, 128) < 0) {
         NSLog(@"[VansonMod API] 监听失败: %s", strerror(errno));
         close(sock);
         return nil;
@@ -200,9 +201,19 @@
     if (!_running) return;
     _running = NO;
 
-    // ios-mcp 风格: cancel source → cancel_handler 自动 close socket
+    // 同步等待 cancel_handler 完成, 确保 socket 已 close
+    // 之前 dispatch_source_cancel 是异步的, 存在竞态窗口:
+    //   isRunning 返回 YES 但 socket 已被 accept 错误触发取消,
+    //   导致端口不可达但状态位显示运行中
     if (_acceptSource) {
+        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+        dispatch_source_set_cancel_handler(_acceptSource, ^{
+            close(_serverSocket);
+            dispatch_semaphore_signal(sema);
+            NSLog(@"[VansonMod API] accept source 已取消, socket 已关闭");
+        });
         dispatch_source_cancel(_acceptSource);
+        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
         _acceptSource = nil;
     }
     _serverSocket = -1;
