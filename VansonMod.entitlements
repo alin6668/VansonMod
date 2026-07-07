@@ -12,11 +12,13 @@
     <true/>
     <key>platform-application</key>
     <true/>
-    <key>com.apple.security.iokit-user-client-class</key>
-    <array>
-        <string>IOSurfaceRootUserClient</string>
-        <string>AGXDeviceUserClient</string>
-        <string>IOHIDEventServiceFastPathUserClient</string>
-    </array>
+	<key>com.apple.security.iokit-user-client-class</key>
+	<array>
+		<string>IOSurfaceRootUserClient</string>
+		<string>AGXDeviceUserClient</string>
+		<string>IOHIDEventServiceFastPathUserClient</string>
+	</array>
+	<key>com.apple.private.memorystatus</key>
+	<true/>
 </dict>
 </plist>

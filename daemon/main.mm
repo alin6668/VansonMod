@@ -15,12 +15,65 @@
 #import <unistd.h>
 #import <sys/time.h>
 #import <sys/resource.h>
+#import <pthread/qos.h>
 
-static void handle_signal(int sig) {
-    NSLog(@"[vansonmodd] 收到信号 %d (%s)，正在退出...", sig, strsignal(sig));
+// ---------------------------------------------------------------------------
+// memorystatus_control — iOS 私有 API (需要 com.apple.private.memorystatus)
+// 设置 Jetsam 优先级，降低被系统杀死的概率
+// ---------------------------------------------------------------------------
+#ifndef MEMORYSTATUS_CMD_SET_PRIORITY
+#define MEMORYSTATUS_CMD_SET_PRIORITY  1
+#define MEMORYSTATUS_CMD_GET_PRIORITY  2
+#endif
+
+// Jetsam 优先级常量 (数值越大越不容易被杀)
+#define JETSAM_PRIORITY_CRITICAL       40
+#define JETSAM_PRIORITY_HIGH           30
+#define JETSAM_PRIORITY_DEFAULT        15
+#define JETSAM_PRIORITY_BACKGROUND     10
+
+// memorystatus_control 声明 (私有框架)
+extern int memorystatus_control(uint32_t command, int32_t pid,
+                                uint32_t flags, void *buffer, size_t buffersize);
+
+// ---------------------------------------------------------------------------
+// crash 信号处理 — 记录 crash 日志后用非零退出码退出
+// 非零退出码会触发 launchd KeepAlive 重启
+// ---------------------------------------------------------------------------
+static const int kCrashSignals[] = {
+    SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP
+};
+static const int kCrashSignalCount = sizeof(kCrashSignals) / sizeof(kCrashSignals[0]);
+
+static void crash_handler(int sig) {
+    // 写入 stderr (launchd 会记录到 StandardErrorPath)
+    const char *name = "UNKNOWN";
+    switch (sig) {
+        case SIGSEGV: name = "SIGSEGV"; break;
+        case SIGBUS:  name = "SIGBUS";  break;
+        case SIGABRT: name = "SIGABRT"; break;
+        case SIGILL:  name = "SIGILL";  break;
+        case SIGFPE:  name = "SIGFPE";  break;
+        case SIGTRAP: name = "SIGTRAP"; break;
+    }
+    fprintf(stderr, "[vansonmodd] 💥 CRASH: 收到信号 %d (%s), PID=%d\n",
+            sig, name, getpid());
+
+    // 尝试清理
     [VMAPIRouter stopServer];
     [[VMMemoryEngine shared] clearSession];
-    exit(0);
+
+    // 用非零退出码触发 launchd 重启
+    _exit(128 + sig);
+}
+
+static void handle_signal(int sig) {
+    NSLog(@"[vansonmodd] 收到信号 %d (%s)，退出并等待 launchd 重启...",
+          sig, strsignal(sig));
+    [VMAPIRouter stopServer];
+    [[VMMemoryEngine shared] clearSession];
+    // 非零退出码确保 launchd KeepAlive 触发重启
+    _exit(EXIT_FAILURE);
 }
 
 static void uncaughtExceptionHandler(NSException *exception) {
@@ -29,12 +82,35 @@ static void uncaughtExceptionHandler(NSException *exception) {
     exit(EXIT_FAILURE);
 }
 
-// ================================================================
-// ios-mcp 风格: 多轮延迟重试启动
-// 参考 Tweak.x 中 schedule_bootstrap_autostart 的做法:
-// 在 daemon 启动后 0.2s/1s/2s/5s/10s/20s 依次尝试启动服务器，
-// 确保 launchd 完全拉起进程后再绑定端口。
-// ================================================================
+// ---------------------------------------------------------------------------
+// set_jetsam_priority — 将当前进程设为最高 Jetsam 优先级
+// ---------------------------------------------------------------------------
+static void set_jetsam_priority(void) {
+    int result = memorystatus_control(MEMORYSTATUS_CMD_SET_PRIORITY,
+                                      getpid(),
+                                      JETSAM_PRIORITY_CRITICAL,
+                                      NULL, 0);
+    if (result == 0) {
+        // 回读验证
+        int32_t current = 0;
+        if (memorystatus_control(MEMORYSTATUS_CMD_GET_PRIORITY,
+                                 getpid(), 0,
+                                 &current, sizeof(current)) == 0) {
+            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级: %d (CRITICAL=%d)",
+                  current, JETSAM_PRIORITY_CRITICAL);
+        } else {
+            NSLog(@"[vansonmodd] 🛡️ Jetsam 优先级已设置 (验证失败, 可能需 entitlement)");
+        }
+    } else {
+        NSLog(@"[vansonmodd] ⚠️ Jetsam 优先级设置失败 (errno=%d:%s). "
+              "需要在 entitlements 中添加 com.apple.private.memorystatus",
+              errno, strerror(errno));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ios-mcp 风格: 多轮延迟重试启动 HTTP 服务器
+// ---------------------------------------------------------------------------
 static void schedule_bootstrap_retries(void) {
     static const NSTimeInterval delays[] = {0.2, 1.0, 2.0, 5.0, 10.0, 20.0};
     for (int i = 0; i < 6; i++) {
@@ -53,25 +129,31 @@ static void schedule_bootstrap_retries(void) {
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        // 信号处理
+        // ---- 信号处理 ----
         signal(SIGTERM, handle_signal);
         signal(SIGINT,  handle_signal);
         signal(SIGPIPE, SIG_IGN);
         signal(SIGHUP,  SIG_IGN);
+        // crash 信号 → crash_handler → 记录日志 → _exit(非零) → launchd 重启
+        for (int i = 0; i < kCrashSignalCount; i++) {
+            signal(kCrashSignals[i], crash_handler);
+        }
 
-        // 提高进程优先级，降低被 Jetsam 杀死的概率
-        setpriority(PRIO_PROCESS, 0, -10);
+        // ---- Jetsam 防护 ----
+        setpriority(PRIO_PROCESS, 0, -10);       // UNIX nice 值
+        set_jetsam_priority();                     // iOS Jetsam 优先级
+        // 线程 QoS: 使主线程被调度为 User Interactive 级别
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 
-        // 未捕获异常处理
+        // ---- 未捕获异常处理 ----
         NSSetUncaughtExceptionHandler(&uncaughtExceptionHandler);
 
-        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.2.0 启动 (PID=%d) ===", getpid());
+        NSLog(@"[vansonmodd] === VansonMod HTTP Daemon v3.3.0 启动 (PID=%d) ===", getpid());
         NSLog(@"[vansonmodd] HTTP 引擎: ios-mcp dispatch_source 模式");
 
-        // 注册所有 /api/* 路由
+        // ---- 注册路由 & 启动 HTTP ----
         [VMAPIRouter registerAllRoutes];
 
-        // 首次启动
         NSString *url = [VMAPIRouter startServerOnPort:8848];
         if (url) {
             NSLog(@"[vansonmodd] ✅ HTTP API 已启动: %@", url);
@@ -79,23 +161,44 @@ int main(int argc, char *argv[]) {
             NSLog(@"[vansonmodd] ⚠️ 首次启动失败，将自动重试...");
         }
 
-        // ios-mcp 风格: 安排多轮延迟重试 (0.2s ~ 20s)
+        // ios-mcp 风格: 多轮延迟重试
         schedule_bootstrap_retries();
 
-        // 每 60 秒打印健康日志
+        // ---- Jetsam 防杀心跳 + 健康日志 ----
+        // 每 30 秒执行系统调用保持进程"活跃"状态，同时打印日志
         __block uint32_t tickCount = 0;
-        [NSTimer scheduledTimerWithTimeInterval:60.0 repeats:YES block:^(NSTimer *t) {
+        [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
             tickCount++;
+
+            // 系统调用刷新进程活跃标记 (Jetsam 会跟踪进程 activity timeline)
             struct rusage ru;
             getrusage(RUSAGE_SELF, &ru);
+
+            // 触发一次 kernel 交互，刷新 Jetsam 的 idle tracking
+            pid_t selfPid = getpid();
+            kill(selfPid, 0);  // signal 0 = 权限检查，无副作用，但产生 syscall
+
             VMMemoryEngine *eng = [VMMemoryEngine shared];
-            NSLog(@"[vansonmodd] 💓 #%u | running=%d | attached=%d | pid=%d | "
-                  "results=%lu | mem=%ldMB",
-                  tickCount,
-                  [[VMHTTPServer shared] isRunning],
-                  eng.targetPid != 0, eng.targetPid,
-                  (unsigned long)eng.resultCount,
-                  ru.ru_maxrss / 1024);
+            BOOL serverAlive = [[VMHTTPServer shared] isRunning];
+
+            if (tickCount % 2 == 0) {  // 每 60s 打印详细日志
+                // ru_maxrss 在 iOS 上单位是 bytes, /1024 得 KB
+                NSLog(@"[vansonmodd] 💓 #%u | running=%d | attached=%d | pid=%d | "
+                      "results=%lu | mem=%ldKB",
+                      tickCount, serverAlive,
+                      eng.targetPid != 0, eng.targetPid,
+                      (unsigned long)eng.resultCount,
+                      ru.ru_maxrss / 1024);
+            }
+
+            // 如果服务器意外停止，尝试自动恢复
+            if (!serverAlive) {
+                NSLog(@"[vansonmodd] ⚠️ HTTP 服务器已停止，尝试恢复...");
+                NSString *newURL = [VMAPIRouter startServerOnPort:8848];
+                if (newURL) {
+                    NSLog(@"[vansonmodd] ✅ 服务器已恢复: %@", newURL);
+                }
+            }
         }];
 
         // 持续运行

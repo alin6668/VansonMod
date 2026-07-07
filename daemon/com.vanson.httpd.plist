@@ -19,23 +19,26 @@
     </dict>
     <key>RunAtLoad</key>
     <true/>
+    <!-- KeepAlive = true (非 dict) 最可靠：任何原因退出都会重启 -->
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-        <key>NetworkState</key>
-        <true/>
-    </dict>
-    <!-- 关键: 不加 ProcessType → 默认 Interactive 优先级，Jetsam 不轻易杀 -->
-    <!-- 不加 POSIXSpawnType → 不用 Adaptive，防止 launchd 自行管理生命周期 -->
+    <true/>
+    <!-- 拒绝内存压力退出请求 -->
     <key>EnablePressuredExit</key>
     <false/>
+    <!-- 进程调度优先级 -->
     <key>Nice</key>
-    <integer>-5</integer>
+    <integer>-10</integer>
     <key>LowPriorityIO</key>
     <false/>
+    <!-- launchd 重启间隔(秒)：防止连续崩溃被限流 -->
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+    <!-- 退出超时 -->
     <key>ExitTimeOut</key>
     <integer>10</integer>
+    <!-- 启用事务追踪，launchd 知道进程是活跃的 -->
+    <key>EnableTransactions</key>
+    <true/>
     <key>StandardOutPath</key>
     <string>/var/jb/var/log/vansonmodd.log</string>
     <key>StandardErrorPath</key>
