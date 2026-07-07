@@ -8,10 +8,21 @@
     <array>
         <string>/var/jb/usr/local/bin/vansonmodd</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DYLD_INSERT_LIBRARIES</key>
+        <string>/var/jb/usr/lib/ellekit/libsubstitute.dylib</string>
+        <key>HOME</key>
+        <string>/var/jb/var/mobile</string>
+        <key>TMPDIR</key>
+        <string>/var/jb/var/tmp</string>
+    </dict>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>POSIXSpawnType</key>
+    <string>Adaptive</string>
     <key>StandardOutPath</key>
     <string>/var/jb/var/log/vansonmodd.log</string>
     <key>StandardErrorPath</key>

@@ -1,0 +1,24 @@
+#!/bin/bash
+# VansonMod pre-removal script
+# 卸载 DEB 前停止守护进程
+
+set -e
+
+LAUNCHD_PLIST="/var/jb/Library/LaunchDaemons/com.vanson.httpd.plist"
+
+echo "=============================="
+echo " VansonMod prerm - 停止服务"
+echo "=============================="
+
+# 卸载 plist
+if [ -f "$LAUNCHD_PLIST" ]; then
+    echo "正在卸载守护进程..."
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+fi
+
+# 确保进程被杀掉
+pkill -f vansonmodd 2>/dev/null || true
+sleep 1
+
+echo "✅ 守护进程已停止"
+exit 0

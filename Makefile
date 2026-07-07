@@ -149,7 +149,12 @@ before-package::
 	@mkdir -p $(THEOS_STAGING_DIR)/Library/LaunchDaemons
 	@cp daemon/com.vanson.httpd.plist $(THEOS_STAGING_DIR)/Library/LaunchDaemons/
 	@mkdir -p $(THEOS_STAGING_DIR)/var/log
-	@echo "✅ LaunchDaemon plist 已打包"
+	@# 包含 DEB 安装/卸载脚本
+	@mkdir -p $(THEOS_STAGING_DIR)/DEBIAN
+	@cp postinst $(THEOS_STAGING_DIR)/DEBIAN/postinst 2>/dev/null || true
+	@cp prerm $(THEOS_STAGING_DIR)/DEBIAN/prerm 2>/dev/null || true
+	@chmod +x $(THEOS_STAGING_DIR)/DEBIAN/postinst $(THEOS_STAGING_DIR)/DEBIAN/prerm 2>/dev/null || true
+	@echo "✅ LaunchDaemon plist + 安装脚本 已打包"
 
 # ============================================================
 # 打包脚本

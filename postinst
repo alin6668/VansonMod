@@ -1,0 +1,71 @@
+#!/bin/bash
+# VansonMod post-installation script
+# 安装 DEB 后自动加载守护进程
+
+set -e
+
+LAUNCHD_PLIST="/var/jb/Library/LaunchDaemons/com.vanson.httpd.plist"
+DAEMON_BIN="/var/jb/usr/local/bin/vansonmodd"
+
+echo "=============================="
+echo " VansonMod postinst"
+echo "=============================="
+
+# ============================================================
+# 1. 权限修复
+# ============================================================
+if [ -f "$DAEMON_BIN" ]; then
+    chmod 755 "$DAEMON_BIN"
+    echo "✅ 守护进程权限已设置: $DAEMON_BIN"
+fi
+
+if [ -f "$LAUNCHD_PLIST" ]; then
+    chmod 644 "$LAUNCHD_PLIST"
+    echo "✅ plist 权限已设置: $LAUNCHD_PLIST"
+fi
+
+# ============================================================
+# 2. 创建 log 目录
+# ============================================================
+mkdir -p /var/jb/var/log
+chmod 755 /var/jb/var/log
+
+# ============================================================
+# 3. 卸载旧实例（如果存在）
+# ============================================================
+if launchctl list | grep -q "com.vanson.httpd"; then
+    echo "⚠️  卸载旧的守护进程实例..."
+    launchctl unload "$LAUNCHD_PLIST" 2>/dev/null || true
+    sleep 1
+fi
+
+# 杀掉可能残留的进程
+pkill -f vansonmodd 2>/dev/null || true
+sleep 1
+
+# ============================================================
+# 4. 加载守护进程
+# ============================================================
+echo "正在加载守护进程..."
+if launchctl load "$LAUNCHD_PLIST"; then
+    echo "✅ 守护进程已加载！"
+    sleep 2
+
+    # 验证是否在运行
+    if launchctl list | grep -q "com.vanson.httpd"; then
+        echo "✅ 守护进程运行状态: OK"
+    else
+        echo "⚠️  守护进程可能未成功启动，检查日志:"
+        echo "   cat /var/jb/var/log/vansonmodd.log"
+    fi
+else
+    echo "❌ 守护进程加载失败！"
+    exit 1
+fi
+
+echo "=============================="
+echo " VansonMod v3.1.2 安装完成"
+echo " HTTP API: http://<设备IP>:8848"
+echo "=============================="
+
+exit 0
