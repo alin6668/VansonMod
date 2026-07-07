@@ -152,9 +152,9 @@ before-package::
 after-package::
 	@echo "正在收集产物到 packages/ ..."
 	@mkdir -p packages
-	@# 收集 DEB (Theos 可能放在根目录或 .theos 里)
-	@find . .theos -maxdepth 2 -name "*.deb" -type f 2>/dev/null | while read deb; do \
-		cp -v "$$deb" packages/; \
+	@# 收集 DEB (Theos 可能放在根目录或 .theos 里，排除 packages 自身)
+	@find . .theos -maxdepth 2 -not -path "./packages/*" -name "*.deb" -type f 2>/dev/null | while read deb; do \
+		cp -v "$$deb" packages/ 2>/dev/null || true; \
 	done
 ifeq ($(SKIP_TIPA),1)
 	@echo "跳过 TIPA..."
