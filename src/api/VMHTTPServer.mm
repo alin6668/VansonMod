@@ -37,7 +37,7 @@
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong) NSMutableArray<VMRouteEntry *> *routes;
 @property (nonatomic, copy)   NSString *serverURL;
-@property (nonatomic, assign) dispatch_source_t acceptSource;
+@property (nonatomic, strong) dispatch_source_t acceptSource;
 @property (nonatomic, strong) dispatch_queue_t clientQueue;
 @end
 
