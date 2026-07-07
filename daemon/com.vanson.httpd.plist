@@ -6,15 +6,15 @@
     <string>com.vanson.httpd</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/vansonmodd</string>
+        <string>/var/jb/usr/local/bin/vansonmodd</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/var/log/vansonmodd.log</string>
+    <string>/var/jb/var/log/vansonmodd.log</string>
     <key>StandardErrorPath</key>
-    <string>/var/log/vansonmodd_err.log</string>
+    <string>/var/jb/var/log/vansonmodd_err.log</string>
 </dict>
 </plist>

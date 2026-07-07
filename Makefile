@@ -140,6 +140,7 @@ vansonmodd_FRAMEWORKS = Foundation
 vansonmodd_CFLAGS = -fobjc-arc -I.
 vansonmodd_CCFLAGS = -fvisibility=hidden -fvisibility-inlines-hidden -std=c++17 -I.
 vansonmodd_INSTALL_PATH = /usr/local/bin
+vansonmodd_CODESIGN_FLAGS = -Sdaemon/daemon.entitlements
 
 include $(THEOS_MAKE_PATH)/tool.mk
 
@@ -147,6 +148,7 @@ include $(THEOS_MAKE_PATH)/tool.mk
 before-package::
 	@mkdir -p $(THEOS_STAGING_DIR)/Library/LaunchDaemons
 	@cp daemon/com.vanson.httpd.plist $(THEOS_STAGING_DIR)/Library/LaunchDaemons/
+	@mkdir -p $(THEOS_STAGING_DIR)/var/log
 	@echo "✅ LaunchDaemon plist 已打包"
 
 # ============================================================
