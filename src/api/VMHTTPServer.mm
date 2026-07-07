@@ -7,6 +7,7 @@
 #import "VMHTTPServer.h"
 
 #import <arpa/inet.h>
+#import <fcntl.h>
 #import <ifaddrs.h>
 #import <net/if.h>
 #import <netinet/tcp.h>
@@ -69,17 +70,21 @@
 - (nullable NSString *)startOnPort:(uint16_t)port {
     if (self.running) return self.serverURL;
 
-    // 1. 创建 TCP socket
+    // 1. 创建 TCP socket (非阻塞)
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         NSLog(@"[VansonMod API] 创建 socket 失败: %s", strerror(errno));
         return nil;
     }
 
-    // 2. SO_REUSEADDR + SO_REUSEPORT — 允许快速重启/重绑定
+    // 非阻塞模式 — accept() 永不阻塞, 避免事件处理被卡住
+    int flags = fcntl(sock, F_GETFL, 0);
+    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+
+    // 2. SO_REUSEADDR — 允许快速重启/重绑定
+    // 注意: 不使用 SO_REUSEPORT, iOS 上该选项可能导致 accept 行为不稳定
     int optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-    setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval));
 
     // 3. TCP KeepAlive — 防止 NAT 映射超时
     int keepalive = 1;
@@ -167,26 +172,42 @@
                 }
             });
         } else {
-            // accept 失败 → 记录错误用于诊断
+            // accept 失败 → 诊断并记录
             int err = errno;
             if (err == EBADF || err == EINVAL || err == ENOTSOCK) {
-                // 致命错误: socket 已失效，停止接收
-                NSLog(@"[VansonMod API] ❌ accept 致命错误: %s (errno=%d), 停止接收",
-                      strerror(err), err);
+                // 致命错误: socket fd 已失效
+                NSLog(@"[VansonMod API] ❌ accept 致命错误: %s (errno=%d) fd=%d, 停止接收",
+                      strerror(err), err, sock);
+                self->_running = NO;  // 同步重置状态, 避免 isRunning 仍返回 YES
                 dispatch_source_cancel(self->_acceptSource);
-            } else if (err != EAGAIN && err != EWOULDBLOCK && err != EINTR) {
-                // 意外错误，记录日志
-                NSLog(@"[VansonMod API] ⚠️ accept 错误: %s (errno=%d)",
-                      strerror(err), err);
+            } else if (err == EAGAIN || err == EWOULDBLOCK) {
+                // 非阻塞模式下正常: 底层事件尚未来得及就绪, source 会再次触发
+                // 记录频率(每 60 次才打印一次, 减少噪音)
+                static int eagainCount = 0;
+                if (++eagainCount % 60 == 0) {
+                    NSLog(@"[VansonMod API] ℹ️ accept EAGAIN x%d (非阻塞模式正常)", eagainCount);
+                }
+            } else if (err == EINTR) {
+                // 被信号中断, 正常
+            } else if (err == ECONNABORTED) {
+                // 客户端在 accept 前断开, 正常
+            } else if (err == EMFILE || err == ENFILE) {
+                // fd 耗尽 — 严重!
+                NSLog(@"[VansonMod API] 🔴 fd 耗尽! %s (errno=%d)", strerror(err), err);
+            } else {
+                // 其他意外错误
+                NSLog(@"[VansonMod API] ⚠️ accept 意外错误: %s (errno=%d) fd=%d",
+                      strerror(err), err, sock);
             }
-            // EAGAIN/EWOULDBLOCK/EINTR: 正常，等待下次事件
         }
     });
 
-    // ios-mcp: cancel_handler 只负责关 socket
+    // ios-mcp: cancel_handler 负责关 socket + 重置状态
     dispatch_source_set_cancel_handler(_acceptSource, ^{
-        close(sock);
-        NSLog(@"[VansonMod API] accept source 已取消, socket 已关闭");
+        if (sock >= 0) {
+            close(sock);
+            NSLog(@"[VansonMod API] accept source 已取消, socket fd=%d 已关闭", sock);
+        }
     });
 
     dispatch_resume(_acceptSource);

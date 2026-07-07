@@ -211,9 +211,14 @@ int main(int argc, char *argv[]) {
 
             // ---- 自愈逻辑 ----
             if (serverRunning && !portReachable) {
-                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! 重启 HTTP...",
-                      kHTTPPort);
+                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! "
+                      "socket=%d source=%p → 重启 HTTP...",
+                      kHTTPPort,
+                      [VMHTTPServer shared].serverSocket,
+                      [VMHTTPServer shared].acceptSource);
                 [[VMHTTPServer shared] stop];
+                // 短暂等待确保端口完全释放 (TIME_WAIT 等)
+                usleep(100000); // 100ms
                 NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
                 if (newURL) {
                     NSLog(@"[vansonmodd] ✅ HTTP 服务器已重启: %@", newURL);
