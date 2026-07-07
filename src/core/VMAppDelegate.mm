@@ -8,17 +8,14 @@
 #import "src/utils/helpers/VMUIHelper.h"
 #import "src/utils/managers/VMImportHandler.h"
 #import "src/api/VMAPIRouter.h"
-#import <AVFoundation/AVFoundation.h>
 #import <UIKit/UIKit.h>
 
 #define TR(key) ([[VMLocalization shared] localizedString:key])
 
 @interface VMAppDelegate ()
-@property(nonatomic, strong) AVAudioPlayer *backgroundPlayer;
 @property(nonatomic, assign) UIBackgroundTaskIdentifier bgTask;
 - (void)checkAppReinstallOrUpdate;
 - (void)setupDefaultSettingsIfNeeded;
-- (void)startKeepAlive;
 - (void)renewBackgroundTask;
 @end
 
@@ -76,8 +73,6 @@
     [UITabBar appearance].scrollEdgeAppearance = tabAppearance;
   }
 
-  [self startKeepAlive];
-
   // ---- 启动 HTTP API 服务器 (供 AUTOGO 远程调用) ----
   [VMAPIRouter registerAllRoutes];
   NSString *apiURL = [VMAPIRouter startServerOnPort:8848];
@@ -98,89 +93,11 @@
   return YES;
 }
 
-- (void)startKeepAlive {
-  [[AVAudioSession sharedInstance]
-      setCategory:AVAudioSessionCategoryPlayback
-      withOptions:AVAudioSessionCategoryOptionMixWithOthers
-            error:nil];
-  [[AVAudioSession sharedInstance] setActive:YES error:nil];
-
-  // 监听音频中断，自动恢复播放
-  [[NSNotificationCenter defaultCenter]
-      addObserver:self
-         selector:@selector(handleAudioInterruption:)
-             name:AVAudioSessionInterruptionNotification
-           object:nil];
-
-  // 生成 2 秒静音 WAV (44100Hz, 16-bit, mono) — 数据块大小正确写入头
-  int sampleRate = 44100;
-  int bitsPerSample = 16;
-  int channels = 1;
-  int durationSeconds = 2;
-  int dataSize = sampleRate * (bitsPerSample / 8) * channels * durationSeconds;
-
-  NSMutableData *wav = [NSMutableData data];
-  // RIFF 头
-  uint32_t fileSize = 36 + dataSize;
-  [wav appendBytes:"RIFF" length:4];
-  [wav appendBytes:&fileSize length:4];
-  [wav appendBytes:"WAVE" length:4];
-  // fmt 子块
-  [wav appendBytes:"fmt " length:4];
-  uint32_t fmtSize = 16;
-  uint16_t audioFormat = 1; // PCM
-  uint16_t numChannels = channels;
-  uint32_t sr = sampleRate;
-  uint32_t byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  uint16_t blockAlign = numChannels * (bitsPerSample / 8);
-  uint16_t bps = bitsPerSample;
-  [wav appendBytes:&fmtSize length:4];
-  [wav appendBytes:&audioFormat length:2];
-  [wav appendBytes:&numChannels length:2];
-  [wav appendBytes:&sr length:4];
-  [wav appendBytes:&byteRate length:4];
-  [wav appendBytes:&blockAlign length:2];
-  [wav appendBytes:&bps length:2];
-  // data 子块
-  [wav appendBytes:"data" length:4];
-  [wav appendBytes:&dataSize length:4];
-  // 静音 PCM 数据
-  [wav appendData:[NSMutableData dataWithLength:dataSize]];
-
-  NSError *err;
-  self.backgroundPlayer = [[AVAudioPlayer alloc] initWithData:wav error:&err];
-  if (self.backgroundPlayer) {
-    self.backgroundPlayer.numberOfLoops = -1;  // 无限循环
-    self.backgroundPlayer.volume = 0.01;
-    [self.backgroundPlayer prepareToPlay];
-    [self.backgroundPlayer play];
-    NSLog(@"[VansonMod] 🔊 静音保活音频已启动");
-  } else {
-    NSLog(@"[VansonMod] ⚠️ 保活音频初始化失败: %@", err);
-  }
-}
-
-- (void)handleAudioInterruption:(NSNotification *)notification {
-  NSDictionary *info = notification.userInfo;
-  NSUInteger type =
-      [info[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
-  if (type == 0) { // AVAudioSessionInterruptionTypeEnded = 0
-    [[AVAudioSession sharedInstance] setActive:YES error:nil];
-    if (![self.backgroundPlayer isPlaying]) {
-      [self.backgroundPlayer play];
-    }
-    NSLog(@"[VansonMod] 🔊 音频中断结束，已恢复播放");
-  }
-}
-
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-  if (![self.backgroundPlayer isPlaying]) {
-    [self.backgroundPlayer play];
-  }
-  // 启动自续约后台任务，防止 iOS 过早挂起
+  // 启动自续约后台任务，确保关键操作（如内存锁定写入）不被中断
   self.bgTask = UIBackgroundTaskInvalid;
   [self renewBackgroundTask];
-  NSLog(@"[VansonMod] 🌙 进入后台，保活中...");
+  NSLog(@"[VansonMod] 🌙 进入后台，启动后台任务...");
 }
 
 // 后台任务自续约 — 到期前重新申请，保持 App 不被挂起
@@ -214,12 +131,7 @@
 - (void)application:(UIApplication *)application
     performFetchWithCompletionHandler:
         (void (^)(UIBackgroundFetchResult))completionHandler {
-  NSLog(@"[VansonMod] 📡 后台刷新触发，确保服务运行中...");
-  // 确保静音播放器在运行（维持后台存活）
-  if (![self.backgroundPlayer isPlaying]) {
-    [self.backgroundPlayer play];
-  }
-  // 告知系统有新数据可用（实际作用是保持 HTTP 服务存活）
+  NSLog(@"[VansonMod] 📡 后台刷新触发，HTTP 服务运行中...");
   completionHandler(UIBackgroundFetchResultNewData);
 }
 
