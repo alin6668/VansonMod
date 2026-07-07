@@ -1,6 +1,7 @@
 //
 // VMHTTPServer.mm
-// 基于 POSIX socket + pthread 的轻量级 HTTP 服务器
+// 基于 ios-mcp (witchan/ios-mcp) 的 dispatch_source 模式重写
+// 事件驱动 accept，永不阻塞，线程安全
 //
 
 #import "VMHTTPServer.h"
@@ -12,7 +13,6 @@
 #import <sys/socket.h>
 #import <sys/types.h>
 #import <unistd.h>
-#import <pthread.h>
 
 #pragma mark - VMHTTPRequest
 
@@ -37,7 +37,8 @@
 @property (nonatomic, assign) BOOL running;
 @property (nonatomic, strong) NSMutableArray<VMRouteEntry *> *routes;
 @property (nonatomic, copy)   NSString *serverURL;
-@property (nonatomic, assign) dispatch_source_t acceptSource;  // dispatch_source 接收事件源
+@property (nonatomic, assign) dispatch_source_t acceptSource;
+@property (nonatomic, strong) dispatch_queue_t clientQueue;
 @end
 
 @implementation VMHTTPServer
@@ -58,6 +59,9 @@
         _port = 0;
         _running = NO;
         _routes = [NSMutableArray array];
+        // ios-mcp 风格: 专用并发队列处理客户端请求
+        _clientQueue = dispatch_queue_create("com.vanson.httpd.client",
+                                             DISPATCH_QUEUE_CONCURRENT);
     }
     return self;
 }
@@ -65,32 +69,28 @@
 - (nullable NSString *)startOnPort:(uint16_t)port {
     if (self.running) return self.serverURL;
 
-    // 创建 socket
+    // 1. 创建 TCP socket
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         NSLog(@"[VansonMod API] 创建 socket 失败: %s", strerror(errno));
         return nil;
     }
 
-    // 设置 SO_REUSEADDR
+    // 2. SO_REUSEADDR — 允许快速重启
     int optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
 
-    // ---- TCP KeepAlive: 防止后台时 NAT/防火墙清除空闲连接映射 ----
-    // 这是 HTTP 服务在后台持续可用的关键！
-    // 没有 KeepAlive，iOS 后台后 NAT 映射约 30-300 秒即失效，外部无法连接。
+    // 3. TCP KeepAlive — 防止 NAT 映射超时
     int keepalive = 1;
     setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
-
-    // iOS/macOS 的 TCP keepalive 精细参数
-    int keepidle = 30;   // 30 秒空闲后开始发送探测包
-    int keepintvl = 5;   // 每 5 秒发一次探测
-    int keepcnt  = 3;    // 3 次探测失败后判定连接断开
+    int keepidle = 30;
+    int keepintvl = 5;
+    int keepcnt  = 3;
     setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, &keepidle, sizeof(keepidle));
     setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
     setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,  &keepcnt,  sizeof(keepcnt));
 
-    // 绑定
+    // 4. bind
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -103,105 +103,101 @@
         return nil;
     }
 
-    // 监听
-    if (listen(sock, 10) < 0) {
+    // 5. listen
+    if (listen(sock, 8) < 0) {
         NSLog(@"[VansonMod API] 监听失败: %s", strerror(errno));
         close(sock);
         return nil;
     }
 
-    self.serverSocket = sock;
-    self.port = port;
-    self.running = YES;
+    _serverSocket = sock;
+    _port = port;
+    _running = YES;
 
     // 获取本机 WiFi IP
     NSString *localIP = [self getWiFiIP];
     self.serverURL = [NSString stringWithFormat:@"http://%@:%d", localIP ?: @"127.0.0.1", port];
 
     // ================================================================
-    // 使用 dispatch_source 代替阻塞 accept() 循环
-    // 原因: GCD 全局队列线程会被 iOS 系统回收/杀死，导致 accept 线程
-    //       静默退出（主线程 timer 仍运行，running=YES 但无法接收连接）。
-    //       dispatch_source 是事件驱动，集成在主队列的 runloop 中，
-    //       不会被 iOS 回收，资源占用也更低。
+    // ios-mcp 风格的 dispatch_source accept 事件监听
+    //
+    // 与 ios-mcp (witchan/ios-mcp) 完全一致的实现模式:
+    //   - 专用并发队列承载 dispatch_source (非主队列)
+    //   - 每次事件只 accept() 一次，不做 while 循环
+    //   - 新连接派发到独立 _clientQueue 处理
+    //   - cancel_handler 中关闭 socket
+    //
+    // 为什么这样写?
+    //   dispatch_source 是事件驱动的，当 socket 可读时内核通知 GCD，
+    //   GCD 调度 event handler block 到指定队列。单个事件中只需 accept
+    //   一次，如果有积压连接，内核会再次触发 READ 事件。
+    //
+    //   ios-mcp 项目线上稳定运行已证明此模式在 iOS 越狱环境下完全可靠。
     // ================================================================
-    dispatch_source_t src = dispatch_source_create(
+
+    // 专用并发队列 (ios-mcp 风格)
+    dispatch_queue_t acceptQueue = dispatch_queue_create(
+        "com.vanson.httpd.accept", DISPATCH_QUEUE_CONCURRENT);
+
+    _acceptSource = dispatch_source_create(
         DISPATCH_SOURCE_TYPE_READ,
         (uintptr_t)sock, 0,
-        dispatch_get_main_queue()   // ← 主队列 = 有 runloop 保活
-    );
+        acceptQueue);
 
     __weak __typeof__(self) weakSelf = self;
-    dispatch_source_set_event_handler(src, ^{
-        __strong __typeof__(weakSelf) strongSelf = weakSelf;
-        if (!strongSelf) return;
+    dispatch_source_set_event_handler(_acceptSource, ^{
+        __strong __typeof__(weakSelf) self = weakSelf;
+        if (!self) return;
 
-        // 循环 accept 直到没有更多连接（避免遗漏积压连接）
-        while (1) {
-            struct sockaddr_in clientAddr;
-            socklen_t clientLen = sizeof(clientAddr);
-            int clientFd = accept(strongSelf.serverSocket,
-                                  (struct sockaddr *)&clientAddr, &clientLen);
-            if (clientFd < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) break; // 无更多连接
-                if (errno == EINTR) continue;                       // 信号中断，重试
-                if (errno == EBADF || errno == EINVAL) {
-                    NSLog(@"[VansonMod API] accept 致命错误: %s, 停止接收",
-                          strerror(errno));
-                    dispatch_source_cancel(src);
-                    return;
-                }
-                break;
-            }
-
-            // 设置超时
+        // ios-mcp: 每次事件只 accept 一次
+        int client = accept(sock, NULL, NULL);
+        if (client >= 0) {
+            // 设置客户端 socket 超时
             struct timeval tv;
             tv.tv_sec = 10;
             tv.tv_usec = 0;
-            setsockopt(clientFd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-            setsockopt(clientFd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-            // 在后台队列处理客户端请求
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-                [strongSelf handleClient:clientFd];
+            // 派发到 clientQueue 并发处理 (ios-mcp 风格)
+            dispatch_async(self->_clientQueue, ^{
+                [self handleClient:client];
             });
         }
+        // accept 失败时不处理，dispatch_source 会在 socket 再次可读时重试
     });
 
-    dispatch_source_set_cancel_handler(src, ^{
-        __strong __typeof__(weakSelf) strongSelf = weakSelf;
-        if (strongSelf && strongSelf.serverSocket >= 0) {
-            close(strongSelf.serverSocket);
-            strongSelf.serverSocket = -1;
-        }
-        NSLog(@"[VansonMod API] accept source 已取消");
+    // ios-mcp: cancel_handler 只负责关 socket
+    dispatch_source_set_cancel_handler(_acceptSource, ^{
+        close(sock);
+        NSLog(@"[VansonMod API] accept source 已取消, socket 已关闭");
     });
 
-    dispatch_resume(src);
-    self.acceptSource = src;
+    dispatch_resume(_acceptSource);
 
-    NSLog(@"[VansonMod API] ✅ accept dispatch_source 已启动 (main queue)");
+    NSLog(@"[VansonMod API] ✅ HTTP 服务器已启动 (ios-mcp dispatch_source 模式) → %@:%d",
+          localIP ?: @"0.0.0.0", port);
 
     return self.serverURL;
 }
 
 - (void)stop {
-    self.running = NO;
+    if (!_running) return;
+    _running = NO;
 
-    // 取消 dispatch_source（会自动 close socket）
-    if (self.acceptSource) {
-        dispatch_source_cancel(self.acceptSource);
-        self.acceptSource = nil;
-    } else if (self.serverSocket >= 0) {
-        close(self.serverSocket);
-        self.serverSocket = -1;
+    // ios-mcp 风格: cancel source → cancel_handler 自动 close socket
+    if (_acceptSource) {
+        dispatch_source_cancel(_acceptSource);
+        _acceptSource = nil;
     }
-
+    _serverSocket = -1;
     self.serverURL = nil;
+
+    NSLog(@"[VansonMod API] HTTP 服务器已停止");
 }
 
 - (BOOL)isRunning {
-    return self.running && self.acceptSource != nil && self.serverSocket >= 0;
+    return _running && _acceptSource != nil && _serverSocket >= 0;
 }
 
 - (void)on:(NSString *)method path:(NSString *)path handler:(VMHTTPHandler)handler {
