@@ -49,12 +49,6 @@ typedef void (^VMHTTPHandler)(VMHTTPRequest *req,
 /// 服务器是否运行中
 @property (nonatomic, assign, readonly) BOOL isRunning;
 
-/// 诊断用: socket fd (-1 表示未启动)
-@property (nonatomic, assign, readonly) int serverSocket;
-
-/// 诊断用: accept dispatch source
-@property (nonatomic, strong, readonly, nullable) dispatch_source_t acceptSource;
-
 @end
 
 NS_ASSUME_NONNULL_END

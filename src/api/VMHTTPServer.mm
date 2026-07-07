@@ -1,13 +1,12 @@
 //
 // VMHTTPServer.mm
-// 基于 ios-mcp (witchan/ios-mcp) 的 dispatch_source 模式重写
-// 事件驱动 accept，永不阻塞，线程安全
+// 直接移植自 ios-mcp (witchan/ios-mcp) MCPServer.m 的 HTTP 服务器实现
+// 保持与 ios-mcp 完全一致的生命周期管理，只替换路由/解析/响应层
 //
 
 #import "VMHTTPServer.h"
 
 #import <arpa/inet.h>
-#import <fcntl.h>
 #import <ifaddrs.h>
 #import <net/if.h>
 #import <netinet/tcp.h>
@@ -60,43 +59,35 @@
         _port = 0;
         _running = NO;
         _routes = [NSMutableArray array];
-        // ios-mcp 风格: 专用并发队列处理客户端请求
         _clientQueue = dispatch_queue_create("com.vanson.httpd.client",
                                              DISPATCH_QUEUE_CONCURRENT);
     }
     return self;
 }
 
+// ============================================================================
+// startOnPort — 完全匹配 ios-mcp MCPServer.m startOnPort:
+//   1. 阻塞 socket (不设 O_NONBLOCK)
+//   2. 仅 SO_REUSEADDR
+//   3. 不设 TCP KeepAlive 在监听 socket
+//   4. accept 错误直接忽略，永不 cancel source
+//   5. cancel_handler 仅 close socket
+// ============================================================================
 - (nullable NSString *)startOnPort:(uint16_t)port {
-    if (self.running) return self.serverURL;
+    if (_running) return self.serverURL;
 
-    // 1. 创建 TCP socket (非阻塞)
+    // 1. 创建 TCP socket (ios-mcp: 阻塞模式)
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         NSLog(@"[VansonMod API] 创建 socket 失败: %s", strerror(errno));
         return nil;
     }
 
-    // 非阻塞模式 — accept() 永不阻塞, 避免事件处理被卡住
-    int flags = fcntl(sock, F_GETFL, 0);
-    fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+    // 2. SO_REUSEADDR (ios-mcp: 仅此一项)
+    int reuse = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
 
-    // 2. SO_REUSEADDR — 允许快速重启/重绑定
-    // 注意: 不使用 SO_REUSEPORT, iOS 上该选项可能导致 accept 行为不稳定
-    int optval = 1;
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
-    // 3. TCP KeepAlive — 防止 NAT 映射超时
-    int keepalive = 1;
-    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
-    int keepidle = 30;
-    int keepintvl = 5;
-    int keepcnt  = 3;
-    setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, &keepidle, sizeof(keepidle));
-    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
-    setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,  &keepcnt,  sizeof(keepcnt));
-
-    // 4. bind
+    // 3. bind
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -109,8 +100,8 @@
         return nil;
     }
 
-    // 5. listen
-    if (listen(sock, 128) < 0) {
+    // 4. listen (ios-mcp: backlog=8)
+    if (listen(sock, 8) < 0) {
         NSLog(@"[VansonMod API] 监听失败: %s", strerror(errno));
         close(sock);
         return nil;
@@ -125,89 +116,41 @@
     self.serverURL = [NSString stringWithFormat:@"http://%@:%d", localIP ?: @"127.0.0.1", port];
 
     // ================================================================
-    // ios-mcp 风格的 dispatch_source accept 事件监听
-    //
-    // 与 ios-mcp (witchan/ios-mcp) 完全一致的实现模式:
-    //   - 专用并发队列承载 dispatch_source (非主队列)
-    //   - 每次事件只 accept() 一次，不做 while 循环
-    //   - 新连接派发到独立 _clientQueue 处理
-    //   - cancel_handler 中关闭 socket
-    //
-    // 为什么这样写?
-    //   dispatch_source 是事件驱动的，当 socket 可读时内核通知 GCD，
-    //   GCD 调度 event handler block 到指定队列。单个事件中只需 accept
-    //   一次，如果有积压连接，内核会再次触发 READ 事件。
-    //
-    //   ios-mcp 项目线上稳定运行已证明此模式在 iOS 越狱环境下完全可靠。
+    // ios-mcp dispatch_source accept 事件监听 (完全一致)
     // ================================================================
-
-    // 专用并发队列 (ios-mcp 风格)
     dispatch_queue_t acceptQueue = dispatch_queue_create(
         "com.vanson.httpd.accept", DISPATCH_QUEUE_CONCURRENT);
 
     _acceptSource = dispatch_source_create(
-        DISPATCH_SOURCE_TYPE_READ,
-        (uintptr_t)sock, 0,
-        acceptQueue);
+        DISPATCH_SOURCE_TYPE_READ, (uintptr_t)sock, 0, acceptQueue);
 
-    __weak __typeof__(self) weakSelf = self;
+    __weak typeof(self) weakSelf = self;
     dispatch_source_set_event_handler(_acceptSource, ^{
-        __strong __typeof__(weakSelf) self = weakSelf;
+        __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
 
-        // ios-mcp: 每次事件只 accept 一次
+        // ios-mcp: 每次事件 accept 一次, 错误直接忽略
         int client = accept(sock, NULL, NULL);
         if (client >= 0) {
-            // 设置客户端 socket 超时
-            struct timeval tv;
-            tv.tv_sec = 10;
-            tv.tv_usec = 0;
+            // 设置客户端超时 (ios-mcp: 10s)
+            struct timeval tv = { .tv_sec = 10, .tv_usec = 0 };
             setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
             setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
-            // 派发到 clientQueue 并发处理 (ios-mcp 风格)
             dispatch_async(self->_clientQueue, ^{
                 @autoreleasepool {
                     [self handleClient:client];
                 }
             });
-        } else {
-            // accept 失败 → 诊断并记录
-            int err = errno;
-            if (err == EBADF || err == EINVAL || err == ENOTSOCK) {
-                // 致命错误: socket fd 已失效
-                NSLog(@"[VansonMod API] ❌ accept 致命错误: %s (errno=%d) fd=%d, 停止接收",
-                      strerror(err), err, sock);
-                self->_running = NO;  // 同步重置状态, 避免 isRunning 仍返回 YES
-                dispatch_source_cancel(self->_acceptSource);
-            } else if (err == EAGAIN || err == EWOULDBLOCK) {
-                // 非阻塞模式下正常: 底层事件尚未来得及就绪, source 会再次触发
-                // 记录频率(每 60 次才打印一次, 减少噪音)
-                static int eagainCount = 0;
-                if (++eagainCount % 60 == 0) {
-                    NSLog(@"[VansonMod API] ℹ️ accept EAGAIN x%d (非阻塞模式正常)", eagainCount);
-                }
-            } else if (err == EINTR) {
-                // 被信号中断, 正常
-            } else if (err == ECONNABORTED) {
-                // 客户端在 accept 前断开, 正常
-            } else if (err == EMFILE || err == ENFILE) {
-                // fd 耗尽 — 严重!
-                NSLog(@"[VansonMod API] 🔴 fd 耗尽! %s (errno=%d)", strerror(err), err);
-            } else {
-                // 其他意外错误
-                NSLog(@"[VansonMod API] ⚠️ accept 意外错误: %s (errno=%d) fd=%d",
-                      strerror(err), err, sock);
-            }
         }
+        // ios-mcp 风格: 任何 accept 错误直接忽略, 等待下次事件
+        // 不 cancel source, 不设置 _running=NO
     });
 
-    // ios-mcp: cancel_handler 负责关 socket + 重置状态
+    // ios-mcp: cancel_handler 仅关闭 socket
     dispatch_source_set_cancel_handler(_acceptSource, ^{
-        if (sock >= 0) {
-            close(sock);
-            NSLog(@"[VansonMod API] accept source 已取消, socket fd=%d 已关闭", sock);
-        }
+        close(sock);
+        NSLog(@"[VansonMod API] accept source 已取消, socket 已关闭");
     });
 
     dispatch_resume(_acceptSource);
@@ -218,23 +161,16 @@
     return self.serverURL;
 }
 
+// ============================================================================
+// stop — 完全匹配 ios-mcp MCPServer.m stop:
+//   不等待 cancel_handler, 直接置 nil
+// ============================================================================
 - (void)stop {
     if (!_running) return;
     _running = NO;
 
-    // 同步等待 cancel_handler 完成, 确保 socket 已 close
-    // 之前 dispatch_source_cancel 是异步的, 存在竞态窗口:
-    //   isRunning 返回 YES 但 socket 已被 accept 错误触发取消,
-    //   导致端口不可达但状态位显示运行中
     if (_acceptSource) {
-        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-        dispatch_source_set_cancel_handler(_acceptSource, ^{
-            close(_serverSocket);
-            dispatch_semaphore_signal(sema);
-            NSLog(@"[VansonMod API] accept source 已取消, socket 已关闭");
-        });
         dispatch_source_cancel(_acceptSource);
-        dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
         _acceptSource = nil;
     }
     _serverSocket = -1;
@@ -259,7 +195,6 @@
 
 - (void)handleClient:(int)clientFd {
     @autoreleasepool {
-        // 堆分配缓冲区 (避免 64KB 栈溢出崩溃)
         #define HTTP_RECV_BUF_SIZE 65536
         char *buffer = (char *)malloc(HTTP_RECV_BUF_SIZE);
         if (!buffer) {
@@ -275,7 +210,9 @@
             return;
         }
 
-        NSString *rawRequest = [[NSString alloc] initWithBytes:buffer length:bytesRead encoding:NSUTF8StringEncoding];
+        NSString *rawRequest = [[NSString alloc] initWithBytes:buffer
+                                                        length:bytesRead
+                                                      encoding:NSUTF8StringEncoding];
         free(buffer);
 
         if (!rawRequest) {
@@ -284,7 +221,6 @@
             return;
         }
 
-        // 解析 HTTP 请求
         VMHTTPRequest *req = [self parseRequest:rawRequest];
         if (!req) {
             [self sendResponse:clientFd code:400 json:@{@"error": @"Bad request"}];
@@ -292,14 +228,11 @@
             return;
         }
 
-        // 路由匹配
         VMRouteEntry *matched = [self findRouteForMethod:req.method path:req.path];
 
         if (matched) {
-            // 提取 query 参数
             req.query = [self parseQuery:req.path];
 
-            // 使用 __block + dispatch_semaphore 支持异步 handler
             __block BOOL responded = NO;
             dispatch_semaphore_t sema = dispatch_semaphore_create(0);
 
@@ -309,10 +242,9 @@
                 dispatch_semaphore_signal(sema);
             });
 
-            // 等待异步 handler 完成（最长 30 秒）
-            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+            dispatch_semaphore_wait(sema,
+                                    dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
 
-            // 如果 handler 超时未响应，发送 500
             if (!responded) {
                 [self sendResponse:clientFd code:500 json:@{@"error": @"Handler timeout"}];
             }
@@ -330,7 +262,6 @@
     NSArray *lines = [raw componentsSeparatedByString:@"\r\n"];
     if (lines.count < 1) return nil;
 
-    // 请求行: METHOD /path HTTP/1.1
     NSArray *reqLine = [lines[0] componentsSeparatedByString:@" "];
     if (reqLine.count < 2) return nil;
 
@@ -338,24 +269,25 @@
     req.method = [reqLine[0] uppercaseString];
     req.path = reqLine[1];
 
-    // 解析 headers
     NSMutableDictionary *headers = [NSMutableDictionary dictionary];
     NSUInteger i = 1;
     for (; i < lines.count; i++) {
         NSString *line = lines[i];
-        if (line.length == 0) break; // 空行 = header 结束
+        if (line.length == 0) break;
         NSRange colon = [line rangeOfString:@":"];
         if (colon.location != NSNotFound) {
-            NSString *key = [[line substringToIndex:colon.location] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-            NSString *val = [[line substringFromIndex:colon.location + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSString *key = [[line substringToIndex:colon.location]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSString *val = [[line substringFromIndex:colon.location + 1]
+                             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
             headers[key] = val;
         }
     }
     req.headers = headers;
 
-    // 解析 body (header 后的内容)
     if (i + 1 < lines.count) {
-        req.body = [[lines subarrayWithRange:NSMakeRange(i + 1, lines.count - i - 1)] componentsJoinedByString:@"\r\n"];
+        req.body = [[lines subarrayWithRange:NSMakeRange(i + 1, lines.count - i - 1)]
+                    componentsJoinedByString:@"\r\n"];
     }
 
     return req;
@@ -378,7 +310,6 @@
 }
 
 - (nullable VMRouteEntry *)findRouteForMethod:(NSString *)method path:(NSString *)path {
-    // 去掉 query string
     NSString *cleanPath = path;
     NSRange q = [path rangeOfString:@"?"];
     if (q.location != NSNotFound) {
@@ -386,7 +317,8 @@
     }
 
     for (VMRouteEntry *entry in self.routes) {
-        if ([entry.method isEqualToString:method] && [entry.path isEqualToString:cleanPath]) {
+        if ([entry.method isEqualToString:method] &&
+            [entry.path isEqualToString:cleanPath]) {
             return entry;
         }
     }
@@ -402,11 +334,11 @@
                                                            options:0
                                                              error:&err];
         if (err) {
-            NSString *errStr = [NSString stringWithFormat:@"{\"error\":\"%@\"}", err.localizedDescription];
+            NSString *errStr = [NSString stringWithFormat:@"{\"error\":\"%@\"}",
+                                err.localizedDescription];
             bodyData = [errStr dataUsingEncoding:NSUTF8StringEncoding];
         }
 
-        // 构建响应
         NSString *statusText = [self statusText:code];
         NSMutableString *response = [NSMutableString string];
         [response appendFormat:@"HTTP/1.1 %d %@\r\n", code, statusText];
@@ -414,16 +346,14 @@
         [response appendString:@"Access-Control-Allow-Origin: *\r\n"];
         [response appendString:@"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"];
         [response appendString:@"Access-Control-Allow-Headers: Content-Type\r\n"];
-        [response appendFormat:@"Content-Length: %lu\r\n", (unsigned long)bodyData.length];
+        [response appendFormat:@"Content-Length: %lu\r\n",
+         (unsigned long)bodyData.length];
         [response appendString:@"Connection: close\r\n"];
         [response appendString:@"Server: VansonMod/3.1\r\n"];
         [response appendString:@"\r\n"];
 
-        // 发送 header
         NSData *headerData = [response dataUsingEncoding:NSUTF8StringEncoding];
         send(clientFd, headerData.bytes, headerData.length, 0);
-
-        // 发送 body
         send(clientFd, bodyData.bytes, bodyData.length, 0);
     }
 }
@@ -453,12 +383,13 @@
         if (iface->ifa_addr->sa_family != AF_INET) continue;
 
         NSString *name = [NSString stringWithUTF8String:iface->ifa_name];
-        // 优先 en0 (WiFi)
         if ([name hasPrefix:@"en"]) {
             char addrBuf[INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &((struct sockaddr_in *)iface->ifa_addr)->sin_addr, addrBuf, sizeof(addrBuf));
+            inet_ntop(AF_INET,
+                      &((struct sockaddr_in *)iface->ifa_addr)->sin_addr,
+                      addrBuf, sizeof(addrBuf));
             ip = [NSString stringWithUTF8String:addrBuf];
-            if (![ip hasPrefix:@"127."]) break; // 找到非回环地址即停止
+            if (![ip hasPrefix:@"127."]) break;
         }
     }
     freeifaddrs(interfaces);

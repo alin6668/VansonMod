@@ -209,16 +209,13 @@ int main(int argc, char *argv[]) {
                   (unsigned long)eng.resultCount,
                   ru.ru_maxrss / 1024);
 
-            // ---- 自愈逻辑 ----
+            // ---- 自愈逻辑 (安全网) ----
+            // ios-mcp 的实现中 accept 错误被忽略, source 永不 cancel,
+            // 理论上不需要自愈。但保留此逻辑作为最后保障。
             if (serverRunning && !portReachable) {
-                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! "
-                      "socket=%d source=%p → 重启 HTTP...",
-                      kHTTPPort,
-                      [VMHTTPServer shared].serverSocket,
-                      [VMHTTPServer shared].acceptSource);
+                NSLog(@"[vansonmodd] ⚠️ isRunning=YES 但端口 %d 不可达! 重启 HTTP...",
+                      kHTTPPort);
                 [[VMHTTPServer shared] stop];
-                // 短暂等待确保端口完全释放 (TIME_WAIT 等)
-                usleep(100000); // 100ms
                 NSString *newURL = [VMAPIRouter startServerOnPort:kHTTPPort];
                 if (newURL) {
                     NSLog(@"[vansonmodd] ✅ HTTP 服务器已重启: %@", newURL);
