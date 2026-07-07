@@ -149,6 +149,14 @@ static BOOL tcp_port_reachable(uint16_t port) {
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
+        // ---- 清空日志 — 每次启动重新开始, 防止日志无限膨胀 ----
+        // launchd 已将 stderr/stdout 重定向到 plist 中指定的日志文件,
+        // 用 "w" 模式 freopen 可截断文件归零
+        static const char *kLogPath       = "/var/jb/var/log/vansonmodd.log";
+        static const char *kErrLogPath    = "/var/jb/var/log/vansonmodd_err.log";
+        freopen(kLogPath,    "w", stdout);
+        freopen(kErrLogPath, "w", stderr);
+
         // ---- 信号处理 ----
         signal(SIGTERM, handle_signal);
         signal(SIGINT,  handle_signal);
