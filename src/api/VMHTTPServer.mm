@@ -8,6 +8,7 @@
 #import <arpa/inet.h>
 #import <ifaddrs.h>
 #import <net/if.h>
+#import <netinet/tcp.h>
 #import <sys/socket.h>
 #import <sys/types.h>
 #import <unistd.h>
@@ -73,6 +74,20 @@
     // 设置 SO_REUSEADDR
     int optval = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+
+    // ---- TCP KeepAlive: 防止后台时 NAT/防火墙清除空闲连接映射 ----
+    // 这是 HTTP 服务在后台持续可用的关键！
+    // 没有 KeepAlive，iOS 后台后 NAT 映射约 30-300 秒即失效，外部无法连接。
+    int keepalive = 1;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+
+    // iOS/macOS 的 TCP keepalive 精细参数
+    int keepidle = 30;   // 30 秒空闲后开始发送探测包
+    int keepintvl = 5;   // 每 5 秒发一次探测
+    int keepcnt  = 3;    // 3 次探测失败后判定连接断开
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPALIVE, &keepidle, sizeof(keepidle));
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,  &keepcnt,  sizeof(keepcnt));
 
     // 绑定
     struct sockaddr_in addr;
