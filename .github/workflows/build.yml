@@ -71,14 +71,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: VansonMod-v${{ steps.ver.outputs.version }}
-          path: packages/*.tipa
+          path: |
+            packages/*.tipa
+            packages/*.deb
           retention-days: 90
 
       - name: 发布 Release (tag 触发)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: packages/*.tipa
+          files: |
+            packages/*.tipa
+            packages/*.deb
           name: VansonMod v${{ steps.ver.outputs.version }}
           body: |
             ## 变更
