@@ -42,7 +42,7 @@ jobs:
           ln -sf "$SDK_PATH" "$THEOS_DIR/sdks/iPhoneOS${SDK_VER}.sdk"
           echo "SDK 版本: $SDK_VER"
 
-      - name: 编译
+      - name: 编译 (App + 守护进程)
         run: |
           mkdir -p packages
           if [ "${{ github.event.inputs.skip_tipa }}" = "true" ]; then
@@ -50,6 +50,14 @@ jobs:
           else
             make package
           fi
+
+      - name: 查找守护进程产物
+        run: |
+          echo "===== 守护进程 vansonmodd ====="
+          find . -name "vansonmodd" -type f 2>/dev/null || echo "未找到守护进程二进制"
+          find .theos -name "vansonmodd*" -type f 2>/dev/null || true
+          echo "===== deb 包内容 ====="
+          find .theos -name "*.deb" -type f 2>/dev/null | head -5 || echo "未找到 deb"
 
       - name: 验证产物
         run: |
@@ -75,7 +83,8 @@ jobs:
           body: |
             ## 变更
 
-            - ✨ 新增 HTTP API 服务器 (端口 8848)，支持 AUTOGO 远程调用
-            - 29 个 RESTful 端点：进程控制、内存搜索/读写、锁定、特征码、指针链、RVA 补丁
-            - 自动编译打包
+            - 🔧 HTTP API 守护进程 vansonmodd 独立运行，开机自启
+            - 🚫 移除音频保活机制：App 前台状态恢复正常，不再被误检为 Now Playing
+            - 🧹 App 纯粹作为 UI 控制面板，后台 HTTP 由守护进程负责
+            - 📦 .deb 包自动安装 LaunchDaemon plist + 守护进程二进制
           generate_release_notes: true

@@ -3,6 +3,9 @@ ARCHS = arm64
 
 include $(THEOS)/makefiles/common.mk
 
+# ============================================================
+# 1. VansonMod UI App
+# ============================================================
 APPLICATION_NAME = VansonMod
 
 VansonMod_RESOURCE_DIRS = Resources
@@ -89,8 +92,8 @@ VansonMod_FILES = \
 	src/api/VMHTTPServer.mm \
 	src/api/VMAPIRouter.mm
 
-# 依赖框架
-VansonMod_FRAMEWORKS = UIKit CoreGraphics AVFoundation MobileCoreServices UniformTypeIdentifiers LinkPresentation JavaScriptCore
+# 依赖框架 (已移除 AVFoundation — 音频保活由独立守护进程替换)
+VansonMod_FRAMEWORKS = UIKit CoreGraphics MobileCoreServices UniformTypeIdentifiers LinkPresentation JavaScriptCore
 VansonMod_CFLAGS = -fobjc-arc -I.
 VansonMod_CCFLAGS = -fvisibility=hidden -fvisibility-inlines-hidden -std=c++17 -I.
 
@@ -99,7 +102,53 @@ VansonMod_CODESIGN_FLAGS = -SVansonMod.entitlements
 
 include $(THEOS_MAKE_PATH)/application.mk
 
+# ============================================================
+# 2. vansonmodd 守护进程 (独立于 App，开机自启)
+# ============================================================
+TOOL_NAME = vansonmodd
+
+vansonmodd_FILES = \
+	daemon/main.mm \
+	src/api/VMHTTPServer.mm \
+	src/api/VMAPIRouter.mm \
+	src/memory/VMMemoryEngine.mm \
+	src/memory/core/MemoryCore.cpp \
+	src/memory/core/SessionCore.mm \
+	src/utils/managers/VMLockManager.mm \
+	src/utils/managers/VMPointerManager.mm \
+	src/utils/managers/BackupCore.mm \
+	src/utils/managers/PatchCore.mm \
+	src/utils/managers/StorageCore.mm \
+	src/utils/managers/PointerCore.mm \
+	src/utils/managers/LockCore.mm \
+	src/utils/models/VMPointerChain.mm \
+	src/utils/models/VMRVAPatch.mm \
+	src/utils/models/VMSignatureModel.mm \
+	src/utils/models/VMDataSession.mm \
+	src/utils/models/VMScriptModel.mm \
+	src/utils/helpers/VMStoragePathHelper.mm \
+	src/utils/helpers/VMLocalization.mm \
+	src/utils/helpers/LocalizationCore.cpp \
+	src/utils/helpers/lang/Lang_EN.cpp \
+	src/core/SystemCore.cpp
+
+# 守护进程仅需 Foundation (无 UI 框架)
+vansonmodd_FRAMEWORKS = Foundation
+vansonmodd_CFLAGS = -fobjc-arc -I.
+vansonmodd_CCFLAGS = -fvisibility=hidden -fvisibility-inlines-hidden -std=c++17 -I.
+vansonmodd_INSTALL_PATH = /usr/local/bin
+
+include $(THEOS_MAKE_PATH)/tool.mk
+
+# 安装 LaunchDaemon plist → 开机自启守护进程
+before-package::
+	@mkdir -p $(THEOS_STAGING_DIR)/Library/LaunchDaemons
+	@cp daemon/com.vanson.httpd.plist $(THEOS_STAGING_DIR)/Library/LaunchDaemons/
+	@echo "✅ LaunchDaemon plist 已打包"
+
+# ============================================================
 # 打包脚本
+# ============================================================
 after-package::
 ifeq ($(SKIP_TIPA),1)
 	@echo "跳过 TIPA..."

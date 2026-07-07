@@ -4,7 +4,6 @@
 #import "../../../include/VMSignatureModel.h"
 #import "LockCore.hpp"
 #import <Foundation/Foundation.h>
-#import <UIKit/UIKit.h>
 #include <vector>
 
 @implementation VMLockManager
